@@ -272,3 +272,63 @@ references are to the v4 MVP specification.
   the CORS allowlist being a single origin with no credentials, and that the
   SPA fallback route never shadows `/api/*` (unknown API paths must 404 as API,
   not return HTML).
+
+# Phase 4 Security Notes (Guacamole browser bridges)
+
+## Connection secrets are sealed and never reach the browser
+
+- Per-resource Guacamole connection parameters live in `resource_connections`.
+  Secret parameters (password, private-key, passphrase) are AES-256-GCM sealed
+  under the master key with the table name as AAD, exactly like TOTP secrets;
+  only the parameter NAMES are stored in cleartext (`secret_keys`). The admin
+  API is write-only for secrets: reads return `secret_keys` + `has_secret`,
+  never values, and the policy_changes log records names only.
+- The broker unseals secrets ONLY at mint time, folds them into the connection
+  settings, and encrypts the whole thing into a single guacamole-lite token.
+  The browser only ever holds that opaque token; it never sees raw credentials.
+
+## Tunnel tokens are policy-gated, short-lived, single-use, and IP-bound
+
+- `POST /guac/token` (browser-facing via the auth host) requires a live gateway
+  session, runs the SAME policy decision path as the data-plane ext-authz check
+  (`authz.decision.evaluate_access`, one decision core), and only then mints a
+  token. Every decision writes an audit_log row in the same transaction.
+- Each mint records a `guac_grants` row: token hash, user, resource, source_ip,
+  and an expiry (`HYPROXY_GUAC_GRANT_TTL`, default 60s). The token itself is a
+  bearer credential to the remote resource, so the grant bounds its use.
+- `POST /guac/consume` is called by the data plane when it forward-auths the
+  tunnel WebSocket connect. It re-resolves a LIVE gateway session (so revoking
+  the IdP session tears the tunnel down), then atomically consumes the grant:
+  valid, unexpired, unconsumed, IP-matched, and owner-matched. It returns allow
+  exactly once per token. Expired/consumed grants are GC'd (`hyproxy.cli gc`).
+
+## Trust boundaries and the data plane
+
+- `/guac/consume` is INTERNAL: the data plane's auth-host allowlist exposes only
+  `/guac/token` to clients; `/guac/consume` (and `/authz/check`) stay internal.
+  Verified by a Go test.
+- Guacamole tunnel routes (`"guac_tunnel": true`) are authorized by grant
+  consumption, not the per-request policy check (policy was already evaluated at
+  mint). The Go handler fails closed (503) if the control plane is unreachable,
+  401 on a missing token, 403 on a denied/spent grant. ReverseProxy carries the
+  WebSocket upgrade to the loopback Node tunnel; the gateway cookie is stripped
+  from the upstream like every other backend.
+- The Node guacamole-lite tunnel (`tunnel/`) binds loopback and trusts its
+  network path (like the authz service). It decrypts the token with the shared
+  cypher key and connects to guacd. guacd must sit on a segmented path reachable
+  only from the tunnel.
+
+## Phase 4 accepted risks / reviewer items
+
+- The cypher key is a shared symmetric secret between the broker and the Node
+  tunnel (config, not TPM-sealed yet). Rotating it invalidates in-flight tokens
+  (acceptable given the 60s TTL). Phase 5 can seal it via the SecretsBackend.
+- Source-IP binding on tunnel connect relies on the data plane forwarding the
+  real browser IP to `/guac/consume` (body `source_ip`); the same trusted-proxy
+  assumption already applies to the gateway path.
+- NOT yet built (remaining Phase 4 integration, needs a live guacd, which the
+  dev machine lacks): the in-browser guacamole-common-js client page and the
+  guacd deployment/segmentation runbook, plus tunnel-creation rate limiting.
+  Everything up to and including the data-plane WebSocket authorization is
+  implemented and tested; the guacd hop and browser renderer are the remaining
+  live-only pieces. See `ROLLOUT.md` Phase 4 for the exact status.

@@ -3,6 +3,7 @@ the real WebAuthn flow, obtain a DPoP-bound access token against the `admin-ui`
 client, perform step-up, and issue authenticated admin calls."""
 
 import re
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -19,10 +20,12 @@ from helpers import (
     options_for_device,
     password_step,
 )
+from hyproxy.authz.app import create_app as create_authz_app
 from hyproxy.config import get_settings
 from hyproxy.core import keys as key_service
 from hyproxy.core.crypto import new_token, sha256_b64url
 from hyproxy.core.secrets import FileSecretsBackend
+from hyproxy.db.engine import get_db
 from hyproxy.db.models import OAuthClient, User
 from hyproxy.security.webauthn import expected_origin
 
@@ -138,6 +141,51 @@ async def admin_session(
 
 
 @pytest.fixture
+async def admin_no_stepup(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: Any,
+    admin_ui_client: OAuthClient,
+) -> dict[str, Any]:
+    """An authenticated admin token with NO fresh step-up (mutations must 403)."""
+    user, device = await _login_admin(idp_client, db, make_password_hash)
+    dpop = DpopClient()
+    token = await _obtain_token(idp_client, dpop)
+    return {"user": user, "device": device, "dpop": dpop, "token": token}
+
+
+@pytest.fixture
+async def authz_client(
+    db: AsyncSession, idp_client: httpx.AsyncClient, secrets_backend: FileSecretsBackend
+) -> AsyncIterator[httpx.AsyncClient]:
+    """The authz service (policy check + gateway RP + guac broker) on the auth
+    host, wired to the shared session and the ASGI IdP for the backchannel."""
+    await key_service.bootstrap_if_empty(db, secrets_backend, datetime.now(UTC))
+    settings = get_settings()
+    db.add(
+        OAuthClient(
+            client_id=settings.gateway_client_id,
+            client_name="Gateway",
+            redirect_uris=[f"{settings.external_scheme}://{settings.auth_host}/gateway/callback"],
+        )
+    )
+    await db.flush()
+
+    app = create_authz_app()
+    app.state.idp_http = idp_client
+
+    async def override_db() -> AsyncIterator[AsyncSession]:
+        yield db
+
+    app.dependency_overrides[get_db] = override_db
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url=f"https://{settings.auth_host}"
+    ) as client:
+        yield client
+
+
+@pytest.fixture
 def admin_get(admin_client: httpx.AsyncClient) -> Any:
     """Callable `(dpop, token, path) -> Response` issuing a DPoP-bound GET."""
 
@@ -149,3 +197,22 @@ def admin_get(admin_client: httpx.AsyncClient) -> Any:
         )
 
     return _get
+
+
+@pytest.fixture
+def admin_call(admin_client: httpx.AsyncClient) -> Any:
+    """Callable `(dpop, token, method, path, json?) -> Response`, DPoP-bound."""
+
+    async def _call(
+        dpop: DpopClient, token: str, method: str, path: str, json_body: Any = None
+    ) -> httpx.Response:
+        url = f"https://admin.test{path}"
+        proof = dpop.proof(method, url, access_token=token)
+        return await admin_client.request(
+            method,
+            path,
+            json=json_body,
+            headers={"Authorization": f"DPoP {token}", "DPoP": proof},
+        )
+
+    return _call

@@ -24,6 +24,7 @@ var identityHeaders = []string{"X-Forwarded-User", "X-Auth-User-Id", "X-Auth-Rol
 
 type AuthzChecker interface {
 	Check(ctx context.Context, req authz.CheckRequest) (authz.CheckResponse, error)
+	ConsumeGuac(ctx context.Context, req authz.ConsumeRequest) (bool, error)
 }
 
 type Server struct {
@@ -127,9 +128,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveAuthHost(w http.ResponseWriter, r *http.Request) {
-	// Only the gateway surface is reachable on the auth host; /authz/check
-	// and everything else on the control plane stays internal.
-	if !strings.HasPrefix(r.URL.Path, "/gateway/") {
+	// Only the gateway and guac-broker surfaces are reachable on the auth host;
+	// /authz/check, /guac/consume, and everything else on the control plane
+	// stay internal.
+	if !strings.HasPrefix(r.URL.Path, "/gateway/") && !isPublicGuacPath(r.URL.Path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -137,17 +139,27 @@ func (s *Server) serveAuthHost(w http.ResponseWriter, r *http.Request) {
 	s.authProxy.ServeHTTP(w, r)
 }
 
+// isPublicGuacPath allows only the browser-facing guac broker path. /guac/consume
+// is an internal data-plane->authz call and must NOT be reachable from clients.
+func isPublicGuacPath(path string) bool {
+	return path == "/guac/token"
+}
+
 func (s *Server) serveApp(w http.ResponseWriter, r *http.Request, host string, route config.Route) {
 	stripIdentityHeaders(r.Header)
 	upstream := s.appProxies[host]
+	cookie := s.gatewayCookie(r) // always strip the gateway cookie from upstream
+
+	if route.GuacTunnel {
+		s.serveGuacTunnel(w, r, upstream, cookie)
+		return
+	}
 
 	if !route.AuthRequired() {
-		s.gatewayCookie(r) // still never leak the gateway cookie upstream
 		upstream.ServeHTTP(w, r)
 		return
 	}
 
-	cookie := s.gatewayCookie(r)
 	decision, err := s.authz.Check(r.Context(), authz.CheckRequest{
 		Host:          host,
 		Method:        r.Method,
@@ -178,4 +190,34 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request, host string, r
 	default:
 		http.Error(w, "forbidden", http.StatusForbidden)
 	}
+}
+
+// serveGuacTunnel authorizes and proxies a Guacamole tunnel WebSocket connect.
+// Authorization is a single-use grant consumption (bound to the browser IP and
+// a live gateway session), not the per-request policy check: the broker already
+// evaluated policy when it minted the token. ReverseProxy handles the WebSocket
+// upgrade to the Node guacamole-lite backend. Fails closed.
+func (s *Server) serveGuacTunnel(
+	w http.ResponseWriter, r *http.Request, upstream *httputil.ReverseProxy, cookie string,
+) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "missing token", http.StatusUnauthorized)
+		return
+	}
+	allowed, err := s.authz.ConsumeGuac(r.Context(), authz.ConsumeRequest{
+		Token:         token,
+		SourceIP:      clientIP(r),
+		GatewayCookie: cookie,
+	})
+	if err != nil {
+		s.log.Error("guac consume unavailable", "err", err)
+		http.Error(w, "authorization unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !allowed {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	upstream.ServeHTTP(w, r)
 }

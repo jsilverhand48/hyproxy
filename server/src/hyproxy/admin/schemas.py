@@ -114,6 +114,27 @@ class PolicyOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ResourceConnectionUpsert(BaseModel):
+    protocol: Literal["vnc", "rdp", "ssh"]
+    hostname: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    # Non-secret guacd parameters (all values are strings in the guac protocol).
+    params: dict[str, str] = Field(default_factory=dict)
+    # Write-only: sealed at rest, never returned. Absent on PUT keeps existing.
+    secret_params: dict[str, str] | None = None
+
+
+class ResourceConnectionOut(BaseModel):
+    id: uuid.UUID
+    resource_id: uuid.UUID
+    protocol: str
+    hostname: str
+    port: int
+    params: dict[str, str]
+    secret_keys: list[str]  # names only; values never leave the server
+    has_secret: bool
+
+
 class CredentialOut(BaseModel):
     id: uuid.UUID
     friendly_name: str

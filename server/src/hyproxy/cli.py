@@ -12,7 +12,7 @@ from hyproxy.config import get_settings
 from hyproxy.core import keys as key_service
 from hyproxy.core.secrets import generate_master_key_file, get_secrets_backend
 from hyproxy.db.engine import db_session
-from hyproxy.db.models import DpopJtiSeen, OAuthClient, User
+from hyproxy.db.models import DpopJtiSeen, GuacGrant, OAuthClient, User
 
 
 def run_db[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -128,25 +128,46 @@ def create_client(client_id: str, client_name: str, redirect_uris: tuple[str, ..
     click.echo(f"registered client {client_id}")
 
 
+@cli.command("gen-guac-key")
+def gen_guac_key() -> None:
+    """Generate a base64 32-byte AES-256-CBC key for the Guacamole broker.
+
+    Set it as HYPROXY_GUAC_CYPHER_KEY on the control plane AND as the guacd
+    tunnel's key (guacamole-lite); both sides must share the exact value."""
+    import base64
+    import secrets as _secrets
+
+    click.echo(base64.b64encode(_secrets.token_bytes(32)).decode())
+
+
 @cli.command("gc")
 def gc() -> None:
-    """Delete expired DPoP jtis and gateway login states; retire aged-out keys."""
+    """Delete expired DPoP jtis, gateway login states, spent guac grants; retire keys."""
     now = datetime.now(UTC)
 
-    async def do(session: AsyncSession) -> tuple[int, int, int]:
+    async def do(session: AsyncSession) -> tuple[int, int, int, int]:
         from hyproxy.authz.gateway import gc_login_states
 
         res = cast(
             CursorResult[Any],
             await session.execute(delete(DpopJtiSeen).where(DpopJtiSeen.expires_at <= now)),
         )
+        # Grants are single-use and short-lived: drop expired or already-consumed.
+        grants = cast(
+            CursorResult[Any],
+            await session.execute(
+                delete(GuacGrant).where(
+                    (GuacGrant.expires_at <= now) | (GuacGrant.consumed_at.is_not(None))
+                )
+            ),
+        )
         retired = await key_service.gc_retired(session, now)
         states = await gc_login_states(session, now)
-        return res.rowcount or 0, retired, states
+        return res.rowcount or 0, retired, states, grants.rowcount or 0
 
-    jtis, retired, states = run_db(do)
+    jtis, retired, states, grants = run_db(do)
     click.echo(
-        f"deleted {jtis} expired dpop jtis and {states} login states; "
+        f"deleted {jtis} expired dpop jtis, {states} login states, {grants} guac grants; "
         f"retired {retired} signing keys"
     )
 

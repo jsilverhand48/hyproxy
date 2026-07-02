@@ -16,11 +16,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hyproxy.authz.decision import evaluate_access
 from hyproxy.authz.gateway import resolve_gateway_session
 from hyproxy.config import get_settings
 from hyproxy.db.engine import get_db
-from hyproxy.db.models import AuditLog, Policy, Resource, Role, User, UserRole
-from hyproxy.policy import engine
+from hyproxy.db.models import AuditLog, Resource, User
 
 router = APIRouter()
 
@@ -118,39 +118,12 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
         )
         return CheckResponse(decision="deny", reason="user_inactive")
 
-    role_rows = (
-        await db.execute(
-            select(Role.id, Role.name)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == user.id)
-        )
-    ).all()
-    role_ids = frozenset(row[0] for row in role_rows)
-    role_names = sorted(row[1] for row in role_rows)
-
-    policy_rows = (await db.scalars(select(Policy).where(Policy.resource_id == resource.id))).all()
-    rules = [
-        engine.PolicyRule(
-            role_id=p.role_id,
-            resource_id=p.resource_id,
-            action=p.action,
-            allowed_ports=tuple(p.allowed_ports) if p.allowed_ports is not None else None,
-            allowed_paths=tuple(p.allowed_paths) if p.allowed_paths is not None else None,
-            conditions=p.conditions_json,
-            enabled=p.enabled,
-        )
-        for p in policy_rows
-    ]
     port = body.backend_port or (resource.ports[0] if resource.ports else 0)
     path = (body.uri or "/").split("?", 1)[0]
-    decision = engine.evaluate(
-        rules,
-        user_role_ids=role_ids,
-        resource_id=resource.id,
-        port=port,
-        path=path,
-        now=now,
+    access = await evaluate_access(
+        db, user_id=user.id, resource_id=resource.id, port=port, path=path, now=now
     )
+    decision = access.decision
 
     await _audit(
         db,
@@ -169,6 +142,6 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
         headers={
             "X-Forwarded-User": user.email,
             "X-Auth-User-Id": user.external_id,
-            "X-Auth-Roles": ",".join(role_names),
+            "X-Auth-Roles": ",".join(access.role_names),
         },
     )

@@ -13,6 +13,10 @@
     "plex.localhost": {
       "backend": "http://127.0.0.1:9102",
       "backend_port": 32400
+    },
+    "desktop.localhost": {
+      "backend": "http://127.0.0.1:8600",
+      "guac_tunnel": true
     }
   }
 }

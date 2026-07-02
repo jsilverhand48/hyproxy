@@ -19,11 +19,20 @@ type fakeAuthz struct {
 	resp    authz.CheckResponse
 	err     error
 	lastReq authz.CheckRequest
+
+	guacAllowed bool
+	guacErr     error
+	lastConsume authz.ConsumeRequest
 }
 
 func (f *fakeAuthz) Check(_ context.Context, req authz.CheckRequest) (authz.CheckResponse, error) {
 	f.lastReq = req
 	return f.resp, f.err
+}
+
+func (f *fakeAuthz) ConsumeGuac(_ context.Context, req authz.ConsumeRequest) (bool, error) {
+	f.lastConsume = req
+	return f.guacAllowed, f.guacErr
 }
 
 type captured struct {

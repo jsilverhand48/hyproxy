@@ -94,6 +94,59 @@ class Resource(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
 
 
+class ResourceConnection(Base):
+    """Guacamole connection parameters for a non-HTTP resource (Phase 4).
+
+    One row per resource. Secret parameters (passwords, private keys) are sealed
+    with AES-256-GCM under the master key exactly like TOTP secrets; only the
+    parameter names live in cleartext (`secret_keys`) so the admin UI can show
+    which secrets are set without ever decrypting them."""
+
+    __tablename__ = "resource_connections"
+    __table_args__ = (
+        CheckConstraint(
+            "protocol IN ('vnc','rdp','ssh')", name="resource_connections_protocol_check"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=GEN_UUID)
+    resource_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("resources.id", ondelete="CASCADE"), unique=True
+    )
+    protocol: Mapped[str] = mapped_column(Text)
+    hostname: Mapped[str] = mapped_column(Text)
+    port: Mapped[int] = mapped_column(Integer)
+    # Non-secret guacd parameters (e.g. {"ignore-cert": "true", "username": "x"}).
+    params_json: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    # Sealed JSON of secret parameters (password, private-key, passphrase, ...).
+    secret_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    key_id: Mapped[str | None] = mapped_column(Text)
+    secret_keys: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), server_default=text("'{}'::text[]")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=NOW)
+    updated_at: Mapped[datetime] = mapped_column(server_default=NOW)
+
+
+class GuacGrant(Base):
+    """Single-use, short-lived authorization to open a Guacamole tunnel for a
+    resolved connection. Minted by the broker after a policy allow; consumed by
+    the data plane on WebSocket connect (where liveness is re-checked). The
+    token itself is opaque to us; we store only its hash."""
+
+    __tablename__ = "guac_grants"
+    __table_args__ = (Index("ix_guac_grants_expires_at", "expires_at"),)
+
+    token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    resource_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"))
+    connection_id: Mapped[uuid.UUID]
+    source_ip: Mapped[str] = mapped_column(INET)
+    issued_at: Mapped[datetime] = mapped_column(server_default=NOW)
+    expires_at: Mapped[datetime]
+    consumed_at: Mapped[datetime | None]
+
+
 class Policy(Base):
     __tablename__ = "policies"
     __table_args__ = (

@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # still runs the API alone).
     admin_ui_dist: str = ""
 
+    # Guacamole browser bridges (Phase 4). guac_cypher_key is base64 of the
+    # 32-byte AES-256-CBC key shared with the Node guacamole-lite tunnel; the
+    # broker mints tokens under it. Empty disables guac. guac_grant_ttl bounds
+    # how long a minted tunnel token is valid.
+    guac_cypher_key: str = ""
+    guac_grant_ttl: int = 60
+
     # Rate limiting
     throttle_window: int = 900
     throttle_account_free_failures: int = 3

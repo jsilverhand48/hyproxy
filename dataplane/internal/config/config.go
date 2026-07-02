@@ -22,6 +22,10 @@ type Route struct {
 	// Auth gates the route behind forward-auth (default true; only the auth
 	// host itself should ever disable it).
 	Auth *bool `json:"auth,omitempty"`
+	// GuacTunnel marks a Guacamole WebSocket tunnel backend (the Node
+	// guacamole-lite service). Such routes are authorized by single-use grant
+	// consumption (/guac/consume) instead of the per-request /authz/check.
+	GuacTunnel bool `json:"guac_tunnel,omitempty"`
 }
 
 func (r Route) AuthRequired() bool { return r.Auth == nil || *r.Auth }

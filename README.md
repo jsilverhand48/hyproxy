@@ -22,7 +22,15 @@ non-extractable key), served same-origin by the admin app, with a WebAuthn
 step-up redirect for mutations. Kept off the internet like the rest of the
 management plane.
 
-Later phases add Guacamole browser bridges and the TPM-backed secrets broker.
+Phase 4 (Guacamole browser bridges): browser-only access to RDP/VNC/SSH
+resources. Per-resource connection secrets are AES-256-GCM sealed; a broker
+policy-checks and mints short-lived, single-use, IP-bound guacamole-lite tokens
+(the browser never sees raw credentials); the Go data plane forward-auths and
+consumes the grant on the tunnel WebSocket connect and reverse-proxies it to an
+internal `tunnel/` (guacamole-lite) service that speaks guacd. The in-browser
+client and guacd deployment are the remaining live-only pieces (see `ROLLOUT.md`).
+
+Later phases add the TPM-backed secrets broker and internet-exposure hardening.
 See `ROLLOUT.md` for the phase-by-phase instructions.
 
 ## Layout
@@ -36,6 +44,8 @@ See `ROLLOUT.md` for the phase-by-phase instructions.
   raw-L4 transport.
 - `ui/` React admin UI (Vite + TypeScript). Built to `ui/dist` and served by
   the admin app; see `ui/README.md`.
+- `tunnel/` internal guacamole-lite service (Node): decrypts broker tokens and
+  bridges the WebSocket to guacd. Never internet-facing; see `tunnel/README.md`.
 - `docs/admin-access.md` management-plane access + break-glass runbook.
 - `docs/security-notes.md` security posture; input to the security review.
 

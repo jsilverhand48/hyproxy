@@ -1,0 +1,15 @@
+{
+  "name": "hyproxy-guac-tunnel",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Internal guacamole-lite tunnel: decrypts broker tokens and bridges WebSocket <-> guacd. Never internet-facing; fronted by the Go data plane.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "dependencies": {
+    "guacamole-lite": "^1.2.0"
+  }
+}

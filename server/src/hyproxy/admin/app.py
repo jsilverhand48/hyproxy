@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from hyproxy.admin.routes.connections import router as connections_router
 from hyproxy.admin.routes.policies import router as policies_router
 from hyproxy.admin.routes.resources import router as resources_router
 from hyproxy.admin.routes.roles import router as roles_router
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(roles_router)
     app.include_router(user_roles_router)
     app.include_router(resources_router)
+    app.include_router(connections_router)
     app.include_router(policies_router)
     app.include_router(viewers_router)
 

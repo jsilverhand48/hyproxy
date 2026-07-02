@@ -66,3 +66,51 @@ func (c *Client) Check(ctx context.Context, req CheckRequest) (CheckResponse, er
 	}
 	return out, nil
 }
+
+// ConsumeRequest authorizes a Guacamole tunnel WebSocket connect: single-use,
+// IP-bound, and tied to a live gateway session (so IdP-session revocation tears
+// the tunnel down).
+type ConsumeRequest struct {
+	Token         string `json:"token"`
+	SourceIP      string `json:"source_ip"`
+	GatewayCookie string `json:"gateway_cookie,omitempty"`
+}
+
+type ConsumeResponse struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
+}
+
+// ConsumeGuac reports whether the tunnel connect is authorized. It fails closed:
+// any transport error or non-2xx/3xx status returns allowed=false with err set
+// where relevant. A 403 is a clean deny (allowed=false, err=nil).
+func (c *Client) ConsumeGuac(ctx context.Context, req ConsumeRequest) (bool, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return false, err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, c.base+"/guac/consume", bytes.NewReader(body),
+	)
+	if err != nil {
+		return false, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		var out ConsumeResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return false, err
+		}
+		return out.Decision == "allow", nil
+	}
+	// 401/403 are clean denials; anything else is an error (fail closed).
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return false, nil
+	}
+	return false, fmt.Errorf("guac consume returned %d", resp.StatusCode)
+}

@@ -133,12 +133,35 @@ M6. Serve + appsec + docs. Mount the built SPA from the admin app with an SPA
 
 ---
 
-## Phase 4: Guacamole browser bridges (RDP / VNC / SSH)
+## Phase 4: Guacamole browser bridges (RDP / VNC / SSH) — MOSTLY BUILT
 
 Goal (spec section 10): browser-only access to non-HTTP resources (RDP, VNC,
 SSH) via Apache Guacamole, fronted by the same identity-aware proxy so the same
 login, policy, DPoP session, and audit path apply. The `resources.protocol`
 enum already admits `tcp/vnc/rdp/ssh`; Phase 4 makes those resources reachable.
+
+Architecture (decided): guacamole-lite (Node) tunnel. The browser (guacamole-
+common-js) opens a WebSocket to the Go data plane, which forward-auths + single-
+use-consumes the grant and reverse-proxies the WebSocket to the loopback Node
+`tunnel/` service, which decrypts the broker token and speaks guacd.
+
+Status as of this writing (all tested unless noted):
+- M1 connection model + sealing + admin CRUD: DONE. `resource_connections`
+  (sealed secrets, write-only), migration, `PUT/GET/DELETE
+  /api/v1/resources/{id}/connection`.
+- M2 broker: DONE. `hyproxy/guac/{token,connections,broker}.py`, guacamole-lite
+  AES-256-CBC token codec, policy-checked mint, `guac_grants` (short-lived,
+  single-use, IP + owner bound), audit. Endpoints `POST /guac/token` and
+  internal `POST /guac/consume` in the authz service.
+- M3 data-plane wiring: DONE. `"guac_tunnel": true` routes, `ConsumeGuac` client,
+  WebSocket proxy, fail-closed; auth host exposes `/guac/token` only (consume is
+  internal). Go tests cover allow/deny/503/missing-token and the allowlist.
+- M4a Node tunnel service (`tunnel/`, guacamole-lite): DONE (builds, boots,
+  serves healthz). guacd itself is a native daemon, absent on the dev machine.
+- REMAINING (needs a live guacd, not available on the dev machine): the in-
+  browser guacamole-common-js client page (end-user connect view served behind
+  the gateway), the guacd deployment + network-segmentation runbook, and
+  tunnel-creation rate limiting. The milestones below capture these.
 
 ### Seams already in place
 

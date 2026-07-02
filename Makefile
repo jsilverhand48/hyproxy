@@ -3,10 +3,12 @@ SERVER := server
 UV := cd $(SERVER) && uv run
 
 UI := ui
+TUNNEL := tunnel
 
 .PHONY: up down db-up db-down db-migrate db-revision gen-keys run-idp run-admin \
         bootstrap-admin create-client create-admin-ui-client rotate-key gc lint fmt typecheck \
-        test test-integration test-e2e check audit ui-install ui-build ui-dev
+        test test-integration test-e2e check audit ui-install ui-build ui-dev \
+        gen-guac-key tunnel-install tunnel-run
 
 ## --- Dev database ---------------------------------------------------------
 # Preferred: Docker Compose. Fallback (no Docker): pgserver via scripts/devdb.py.
@@ -86,6 +88,19 @@ ui-build:
 
 ui-dev:
 	cd $(UI) && npm run dev
+
+## --- Guacamole tunnel (Phase 4) ---------------------------------------------
+# Generate the shared AES-256-CBC key, set it as HYPROXY_GUAC_CYPHER_KEY on the
+# control plane AND pass the SAME value to the tunnel as GUAC_CYPHER_KEY. guacd
+# is a separate native daemon (Apache Guacamole); point GUACD_HOST/PORT at it.
+gen-guac-key:
+	$(UV) python -m hyproxy.cli gen-guac-key
+
+tunnel-install:
+	cd $(TUNNEL) && npm install
+
+tunnel-run:
+	cd $(TUNNEL) && npm start
 
 ## --- Data plane (Go) --------------------------------------------------------
 dp-build:
