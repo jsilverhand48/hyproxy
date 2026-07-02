@@ -185,7 +185,7 @@ references are to the v4 MVP specification.
 - auth_required is a 302 to the gateway only for safe (GET/HEAD) navigations;
   other methods get 401 so non-idempotent requests are not silently bounced.
 
-## Phase 2 accepted risks / reviewer items
+## Phase 2 accepted risks / reviewer items (continued below with Phase 3)
 
 - The data plane trusts the network path to the authz service (loopback or a
   private segment); /authz/check has no auth of its own by design and must
@@ -199,3 +199,76 @@ references are to the v4 MVP specification.
   scheme the route specifies. Pin/trust internal CA before enabling https
   backends.
 - gc now also clears expired gateway_login_states.
+
+# Phase 3 Security Notes (admin UI + audit/policy viewers)
+
+## Admin UI auth (browser-held DPoP, no server-trusted UI secret)
+
+- The React admin UI is an OIDC public client (`admin-ui`), not a bearer-token
+  app. It generates a NON-EXTRACTABLE P-256 DPoP key in WebCrypto (IndexedDB,
+  survives reloads), runs authorization code + PKCE (S256), exchanges the code
+  at the IdP token endpoint with a DPoP proof, and calls the admin API with
+  `Authorization: DPoP <token>` plus a fresh proof per request. Every admin API
+  call therefore runs the same `check_request` contract as any resource
+  consumer (JWT + DPoP + session liveness + source-IP binding); a stolen token
+  is useless without the browser key.
+- The access token lives in memory only (never localStorage/sessionStorage);
+  only the OIDC flow's PKCE verifier/state/nonce sit in sessionStorage for the
+  duration of the redirect. On reload the app silently re-runs authorize, which
+  the live IdP session cookie completes without a fresh login.
+
+## Same-origin API, single-origin CORS
+
+- The built SPA is served BY the admin app, so `/api/v1/*` is same-origin and
+  needs no CORS. The only cross-origin browser call is the token exchange to
+  the IdP; the IdP adds a CORS allowance for EXACTLY one configured origin
+  (`HYPROXY_ADMIN_UI_ORIGIN`), methods GET/POST/OPTIONS, request headers
+  `authorization, dpop, content-type`, and `allow_credentials=False` (the flow
+  is bearer/DPoP, never cookie). Empty origin disables CORS entirely.
+
+## Step-up over a validated top-level redirect
+
+- `step_up_verified_at` lives on the IdP session the access token's `sid` points
+  to. The SameSite=Lax IdP session cookie is not sent on the SPA's cross-origin
+  fetches, so step-up cannot be an XHR. On `403 stepup_required` the SPA does a
+  top-level navigation to `GET /auth/stepup?return_to=<current-url>`; the Lax
+  cookie rides the top-level request, the page runs a WebAuthn assertion and
+  sets `step_up_verified_at`, then 302s back. `return_to` is validated to equal
+  the configured admin-UI origin exactly (`valid_stepup_return`): scheme + host
+  + port must match, userinfo/scheme smuggling rejected, and an unset admin-UI
+  origin accepts nothing. The page also requires a live admin-tier session
+  cookie before rendering.
+
+## Viewer endpoints (read-only, admin-tier, projected)
+
+- `/api/v1/audit/access`, `/audit/auth`, `/policy-changes` are admin-tier reads
+  (AdminDep, no step-up). They project explicit `*Out` fields, never the ORM
+  row, and keyset-paginate on the monotonic BigInteger id (stable under
+  concurrent inserts) with a hard page-size cap (<=200). These tables were
+  already whitelist-detail by construction (Phase 1/2); the viewers add no new
+  secret exposure.
+
+## Web appsec
+
+- The admin app sets a strict CSP: `default-src 'none'`, `script-src 'self'`,
+  `style-src 'self'`, `connect-src 'self' <idp-origin>`, `form-action 'self'`,
+  `frame-ancestors 'none'`, `base-uri 'none'`. No `unsafe-inline`/`unsafe-eval`;
+  the SPA ships hashed self-hosted assets only. nosniff / Referrer-Policy
+  no-referrer / X-Frame-Options DENY are set. `connect-src` admits the IdP
+  origin solely for the token exchange (authorize/step-up are top-level
+  navigations, not connect-src).
+- The step-up page and its glue use an external script (`/static/js/stepup.js`)
+  under the IdP's existing strict CSP; no inline scripts.
+
+## Phase 3 accepted risks / reviewer items
+
+- The admin app remains loopback/management-plane only (docs/admin-access.md);
+  the SPA being same-origin does not change that. HSTS is intentionally NOT set
+  on the admin app because dev serves it over http on loopback; production
+  behind the WireGuard/TLS front should add it.
+- The DPoP browser key is bound to the browser profile (IndexedDB). Clearing
+  site data forces a fresh key and re-login; this is expected, not a defect.
+- Reviewer items: `valid_stepup_return` origin comparison (port + scheme),
+  the CORS allowlist being a single origin with no credentials, and that the
+  SPA fallback route never shadows `/api/*` (unknown API paths must 404 as API,
+  not return HTML).

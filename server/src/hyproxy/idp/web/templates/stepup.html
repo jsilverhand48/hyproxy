@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Confirm it's you{% endblock %}
+{% block content %}
+<h1>Confirm it's you</h1>
+<p>This admin action needs a fresh passkey confirmation.</p>
+<p class="error" id="webauthn-error" hidden></p>
+<form id="stepup-form" data-return-to="{{ return_to }}">
+  <button type="submit">Confirm with passkey</button>
+</form>
+<script src="/static/js/stepup.js"></script>
+{% endblock %}

@@ -2,9 +2,11 @@ SHELL := /bin/bash
 SERVER := server
 UV := cd $(SERVER) && uv run
 
+UI := ui
+
 .PHONY: up down db-up db-down db-migrate db-revision gen-keys run-idp run-admin \
-        bootstrap-admin create-client rotate-key gc lint fmt typecheck \
-        test test-integration test-e2e check audit
+        bootstrap-admin create-client create-admin-ui-client rotate-key gc lint fmt typecheck \
+        test test-integration test-e2e check audit ui-install ui-build ui-dev
 
 ## --- Dev database ---------------------------------------------------------
 # Preferred: Docker Compose. Fallback (no Docker): pgserver via scripts/devdb.py.
@@ -66,6 +68,24 @@ run-admin:
 
 run-authz:
 	$(UV) uvicorn hyproxy.authz.app:app --host 127.0.0.1 --port 8500
+
+## --- Admin UI (React) -------------------------------------------------------
+# The SPA is served by the admin app from ui/dist. Register its OIDC client and
+# run the admin app with HYPROXY_ADMIN_UI_ORIGIN set (enables the IdP CORS
+# allowance and the step-up return target). Example:
+#   make create-admin-ui-client args='--redirect-uri http://127.0.0.1:8400/callback'
+#   HYPROXY_ADMIN_UI_ORIGIN=http://127.0.0.1:8400 make run-admin
+create-admin-ui-client:
+	$(UV) python -m hyproxy.cli create-client --client-id admin-ui --name "Admin UI" $(args)
+
+ui-install:
+	cd $(UI) && npm install
+
+ui-build:
+	cd $(UI) && npm run build
+
+ui-dev:
+	cd $(UI) && npm run dev
 
 ## --- Data plane (Go) --------------------------------------------------------
 dp-build:

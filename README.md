@@ -15,8 +15,15 @@ port, routes by Host to allowlisted backends only, forward-auths every
 request against the control plane, and injects identity headers after
 stripping any client-supplied copies.
 
-Later phases add the React admin UI, Guacamole browser bridges, and the
-TPM-backed secrets broker. `ui/` is a placeholder for the UI.
+Phase 3 (admin UI): a React management-plane UI for users, roles, resources,
+and policies, plus read-only audit and policy-change viewers. It is an OIDC
+public client of the IdP using authorization code + PKCE + DPoP (a browser-held
+non-extractable key), served same-origin by the admin app, with a WebAuthn
+step-up redirect for mutations. Kept off the internet like the rest of the
+management plane.
+
+Later phases add Guacamole browser bridges and the TPM-backed secrets broker.
+See `ROLLOUT.md` for the phase-by-phase instructions.
 
 ## Layout
 
@@ -27,6 +34,8 @@ TPM-backed secrets broker. `ui/` is a placeholder for the UI.
 - `dataplane/` Go module: single-port TLS ingress, Host routing, forward-auth,
   reverse proxy. Pluggable listener seam (spec section 12) for a future
   raw-L4 transport.
+- `ui/` React admin UI (Vite + TypeScript). Built to `ui/dist` and served by
+  the admin app; see `ui/README.md`.
 - `docs/admin-access.md` management-plane access + break-glass runbook.
 - `docs/security-notes.md` security posture; input to the security review.
 
@@ -64,6 +73,11 @@ make run-authz         # http://127.0.0.1:8500 (internal only)
 make dp-test           # Go: gofmt + vet + unit tests
 make dp-fuzz           # fuzz the Host/routing parser
 make dp-run            # build and run the data plane (dataplane/config.example.json)
+
+make ui-install        # npm install (Node 20+; dev machine has Node 26)
+make ui-build          # build the SPA to ui/dist (served by the admin app)
+make create-admin-ui-client args='--redirect-uri http://127.0.0.1:8400/callback'
+HYPROXY_ADMIN_UI_ORIGIN=http://127.0.0.1:8400 make run-admin  # serve API + UI
 ```
 
 Copy `.env.example` to `server/.env` and adjust `HYPROXY_DB_URL` (the

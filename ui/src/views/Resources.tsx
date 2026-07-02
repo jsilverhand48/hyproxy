@@ -1,0 +1,116 @@
+import { useState } from "react";
+import { api } from "../lib/api";
+import type { Resource } from "../lib/types";
+import { runMutation, useResource } from "../lib/useApi";
+import { AsyncBody, Banner, Section } from "../components/ui";
+
+const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh"];
+
+export function Resources() {
+  const { data, error, loading, reload } = useResource<Resource[]>("/resources");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", protocol: "https", host: "", ports: "" });
+
+  async function create() {
+    const ports = form.ports
+      .split(",")
+      .map((p) => Number(p.trim()))
+      .filter((p) => Number.isInteger(p) && p > 0);
+    setMsg(
+      await runMutation(() =>
+        api.post<Resource>("/resources", {
+          name: form.name,
+          protocol: form.protocol,
+          host: form.host,
+          ports,
+        }),
+      ),
+    );
+    setForm({ name: "", protocol: "https", host: "", ports: "" });
+    reload();
+  }
+
+  async function toggle(r: Resource) {
+    setMsg(await runMutation(() => api.patch<Resource>(`/resources/${r.id}`, { enabled: !r.enabled })));
+    reload();
+  }
+
+  async function remove(id: string) {
+    setMsg(await runMutation(() => api.del(`/resources/${id}`)));
+    reload();
+  }
+
+  return (
+    <Section title="Resources">
+      <Banner kind="info" message={msg} />
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void create();
+        }}
+      >
+        <input
+          placeholder="name"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          required
+        />
+        <select value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value })}>
+          {PROTOCOLS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+        <input
+          placeholder="host"
+          value={form.host}
+          onChange={(e) => setForm({ ...form, host: e.target.value })}
+          required
+        />
+        <input
+          placeholder="ports (comma sep)"
+          value={form.ports}
+          onChange={(e) => setForm({ ...form, ports: e.target.value })}
+          required
+        />
+        <button type="submit">Add resource</button>
+      </form>
+
+      <AsyncBody loading={loading} error={error} empty={(data ?? []).length === 0}>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Protocol</th>
+              <th>Host</th>
+              <th>Ports</th>
+              <th>Enabled</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data ?? []).map((r) => (
+              <tr key={r.id}>
+                <td>{r.name}</td>
+                <td>{r.protocol}</td>
+                <td>{r.host}</td>
+                <td>{r.ports.join(", ")}</td>
+                <td>{r.enabled ? "yes" : "no"}</td>
+                <td className="actions">
+                  <button className="link" onClick={() => toggle(r)}>
+                    {r.enabled ? "Disable" : "Enable"}
+                  </button>
+                  <button className="link danger" onClick={() => remove(r.id)}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </AsyncBody>
+    </Section>
+  );
+}

@@ -3,7 +3,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.cors import CORSMiddleware
 
+from hyproxy.config import get_settings
 from hyproxy.idp.oidc.authorize import router as authorize_router
 from hyproxy.idp.oidc.discovery import router as discovery_router
 from hyproxy.idp.oidc.revoke import router as revoke_router
@@ -20,6 +22,21 @@ CSP = (
 
 def create_app() -> FastAPI:
     app = FastAPI(title="hyproxy-idp", docs_url=None, redoc_url=None, openapi_url=None)
+
+    # The admin SPA (served on its own management-plane origin) must reach the
+    # cross-origin token/userinfo endpoints. Allow exactly that one origin, the
+    # two request headers the DPoP flow needs, and no credentials (the flow is
+    # bearer/DPoP, never cookie). Empty admin_ui_origin leaves CORS off.
+    admin_ui_origin = get_settings().admin_ui_origin
+    if admin_ui_origin:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[admin_ui_origin],
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["authorization", "dpop", "content-type"],
+            allow_credentials=False,
+            max_age=600,
+        )
 
     @app.middleware("http")
     async def security_headers(

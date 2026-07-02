@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+
+class Page[T](BaseModel):
+    """Keyset-paginated envelope. `next_cursor` is the id to pass as `cursor`
+    for the following page, or null when the last page has been returned."""
+
+    items: list[T]
+    next_cursor: int | None = None
 
 
 class UserCreate(BaseModel):
@@ -126,3 +134,53 @@ class SessionOut(BaseModel):
     revoked_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+# --- Viewers (read-only audit / change history) ------------------------------
+
+
+def _ip_to_str(v: object) -> object:
+    # The INET column deserializes to ipaddress.IPv4Address/IPv6Address.
+    return str(v) if v is not None else v
+
+
+class AuditAccessOut(BaseModel):
+    id: int
+    ts: datetime
+    user_id: uuid.UUID | None
+    resource_id: uuid.UUID | None
+    port: int | None
+    decision: str
+    reason: str | None
+    source_ip: str
+
+    model_config = {"from_attributes": True}
+
+    _norm_ip = field_validator("source_ip", mode="before")(_ip_to_str)
+
+
+class AuthEventOut(BaseModel):
+    id: int
+    ts: datetime
+    event_type: str
+    user_id: uuid.UUID | None
+    session_id: uuid.UUID | None
+    client_id: str | None
+    source_ip: str
+    success: bool
+    detail: dict[str, Any]
+
+    model_config = {"from_attributes": True}
+
+    _norm_ip = field_validator("source_ip", mode="before")(_ip_to_str)
+
+
+class PolicyChangeOut(BaseModel):
+    id: int
+    ts: datetime
+    actor_id: uuid.UUID
+    actor_email: str | None
+    entity_type: str
+    entity_id: uuid.UUID | None
+    action: str
+    change_json: dict[str, Any]

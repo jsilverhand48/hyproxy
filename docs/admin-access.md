@@ -34,6 +34,15 @@ admin API request requires:
   (password + WebAuthn login), and
 - for any mutation, a WebAuthn step-up assertion no older than 5 minutes.
 
+The admin UI (served by the admin app from `ui/dist`) authenticates the same
+way: it is an OIDC public client with a browser-held non-extractable DPoP key,
+so reaching it still requires the network path above plus an admin-tier login,
+and mutations still trigger the WebAuthn step-up. Run the admin app with
+`HYPROXY_ADMIN_UI_ORIGIN` set to the UI origin (loopback in dev) to enable the
+IdP CORS allowance and the step-up return target; leave it empty to serve the
+API alone. The UI adds no new network exposure: it lives entirely on the
+management plane.
+
 ## Break-glass credential
 
 - Each admin enrolls at least two non-break-glass passkeys (primary +

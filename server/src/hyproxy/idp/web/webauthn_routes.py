@@ -13,6 +13,7 @@ import base64
 import json
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -25,6 +26,7 @@ from webauthn.helpers.exceptions import (
 )
 
 from hyproxy.audit.events import AuthEventType, emit
+from hyproxy.config import get_settings
 from hyproxy.db.models import LoginFlow, User, WebAuthnCredential
 from hyproxy.idp import flows as flow_service
 from hyproxy.idp import sessions
@@ -313,6 +315,43 @@ async def enroll_webauthn_verify(request: Request, db: DbDep, body: EnrollBody) 
 
 
 # --- Step-up (fresh assertion on a live session) ------------------------------
+
+
+def valid_stepup_return(return_to: str) -> bool:
+    """The post-step-up target must be the configured admin-UI origin exactly.
+
+    Open-redirect defense identical in spirit to the gateway's return-URL check:
+    scheme + host + port must equal admin_ui_origin, no userinfo, no scheme
+    smuggling. Empty admin_ui_origin means no admin UI is wired, so nothing is a
+    valid target."""
+    origin = get_settings().admin_ui_origin
+    if not origin or not return_to:
+        return False
+    parts = urlsplit(return_to)
+    if parts.scheme not in ("https", "http") or not parts.hostname or parts.username:
+        return False
+    return f"{parts.scheme}://{parts.netloc}" == origin
+
+
+@router.get("/stepup")
+async def stepup_page(request: Request, db: DbDep, return_to: str = "") -> Response:
+    """Top-level page the admin SPA navigates to for a fresh WebAuthn step-up.
+
+    A full-page navigation (not an XHR) so the SameSite=Lax IdP session cookie
+    rides along; the SPA cannot carry it on a cross-origin fetch. On success the
+    page redirects back to the validated admin-UI origin."""
+    if not valid_stepup_return(return_to):
+        return error_page(request, "Invalid step-up request.", status=400)
+    now = datetime.now(UTC)
+    session = await sessions.get_session_from_cookie(
+        db, request.cookies.get(sessions.SESSION_COOKIE), source_ip=client_ip(request), now=now
+    )
+    if session is None:
+        return error_page(request, "Your session expired. Please sign in again.", status=401)
+    user = await db.get(User, session.user_id)
+    if user is None or user.auth_tier != "admin":
+        return error_page(request, "Step-up requires an admin passkey.", status=403)
+    return templates.TemplateResponse(request, "stepup.html", {"return_to": return_to})
 
 
 @router.post("/stepup/options")

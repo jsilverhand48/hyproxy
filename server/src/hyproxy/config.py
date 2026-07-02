@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     idp_internal_url: str = ""
     idp_verify_tls: bool = True
 
+    # Admin UI (React SPA). Its origin (scheme://host[:port]) is the sole CORS
+    # allowance on the IdP token/userinfo endpoints and the only permitted
+    # step-up return target. Empty disables both (default: no admin UI wired).
+    admin_ui_origin: str = ""
+    # Built SPA to serve from the admin app. Empty resolves to ../ui/dist; the
+    # admin app serves it only when the directory exists (so an unbuilt tree
+    # still runs the API alone).
+    admin_ui_dist: str = ""
+
     # Rate limiting
     throttle_window: int = 900
     throttle_account_free_failures: int = 3
