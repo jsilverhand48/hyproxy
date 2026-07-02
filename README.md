@@ -74,20 +74,26 @@ Three top-level orchestration scripts wrap the `make` targets end to end:
   dev keys/certs, admin UI, Go data plane, then IdP + admin + authz + data plane
   together. Ctrl-C stops all of them. Toggles: `SKIP_UI=1`, `FORCE_UI=1`,
   `WITH_TUNNEL=1`.
-- `./bootstrap-prod.sh` performs the one-time first-run production setup
-  (dependency sync, migrations, signing keys, first admin, OIDC clients, UI +
-  data-plane build) and then STOPS short of opening the public port. It is
-  fail-closed, refuses dev-looking configuration, and never self-signs certs.
-  Run it once per deployment.
-- `./start-prod.sh` starts the stack in production. It hard-requires Docker
-  (aborts if absent), fail-closes on any missing production dependency,
-  artifact, or config value, runs Postgres under `docker compose`, applies
-  migrations, and launches the loopback services behind the single public data
-  plane. It builds nothing and relaxes nothing.
+- `./bootstrap-prod.sh` performs the one-time first-run production setup: it
+  builds the container images (the UI is compiled inside the server image), runs
+  migrations, signing keys, the first admin, and OIDC clients inside containers,
+  builds the baremetal data-plane binary, runs the gates, and then STOPS short
+  of opening the public port. It is fail-closed and never self-signs certs. Run
+  it once per deployment.
+- `./start-prod.sh` starts the stack in production following the hybrid model:
+  it hard-requires Docker (aborts if absent), fail-closes on any missing
+  dependency, artifact, or config value, brings up the containerized Postgres +
+  control plane (idp/admin/authz) + guac bridge, then starts the baremetal Go
+  data plane (the single public ingress) in the foreground. It builds nothing.
 
-Production first run: fill in `server/.env` and `dataplane/config.json`, run
-`./bootstrap-prod.sh`, complete the `docs/production.md` section 5 checklist,
-then `./start-prod.sh`. See `docs/TODO.md` for open work and known gaps.
+Production runs as a **hybrid**: the Go data plane is the only baremetal piece
+(the public TLS edge); everything else is containerized in `docker-compose.yml`
+and published on loopback only. See `docs/deployment.md` for the full topology.
+
+Production first run: `cp .env.example .env` and fill it in, author
+`dataplane/config.json`, run `./bootstrap-prod.sh`, complete the
+`docs/production.md` section 5 checklist, then `./start-prod.sh`. See
+`docs/TODO.md` for open work and known gaps.
 
 ## Dev quickstart
 

@@ -33,28 +33,34 @@ the integration is not wired.
 
 ## Production packaging and process management
 
-Attention: `start-prod.sh` currently supervises the Python and Go services as
-foreground child processes. That is a single point of failure with no restart,
-health checking, or log rotation.
+The hybrid model is implemented (`docs/deployment.md`): the control plane, guac
+bridge, and Postgres are containerized in `docker-compose.yml` with health
+checks and `restart` policies; the Go data plane runs on baremetal. The gaps
+below are what remains.
 
-- [ ] Per-service process supervision. Add systemd units (or equivalent) for
-      idp, admin, authz, data plane, and the tunnel, with restart policies,
-      resource limits, and journald logging. Retire the foreground supervisor in
-      `start-prod.sh` in favor of `systemctl start` once units exist.
-- [ ] Application containerization. `docker-compose.yml` only defines Postgres,
-      and with a dev-only password (`devonly`) and the dev `deploy/initdb` seed.
-      `start-prod.sh` hard-requires Docker but only the database runs under it;
-      the app tiers do not. Decide the model: either add Dockerfiles for the app
-      tiers and a real production compose/stack, or run the DB as managed
-      Postgres and drop the hard Docker requirement. Today's split is honest but
-      half-containerized.
-- [ ] Production database secrets. Do not ship the compose `devonly` password to
-      prod. Use a managed instance or inject the password from the secrets
-      backend; keep `HYPROXY_DB_URL` out of the repo.
-- [ ] Readiness gating. The start scripts launch services without waiting for
-      upstreams to be healthy (e.g. the data plane starts before the IdP is
-      accepting connections). Add health/readiness polling between tiers so a
-      slow start does not surface as transient 502s.
+- [x] Application containerization. Done: `server/Dockerfile` (bakes the built
+      UI), `tunnel/Dockerfile`, and a profiled `docker-compose.yml` (tools / app
+      / guac) run every app module as a container. The compose file uses env
+      substitution from the repo-root `.env`.
+- [ ] Baremetal data-plane supervision. The data plane is still started in the
+      foreground by `start-prod.sh` with no restart-on-crash. Add a systemd unit
+      for it (and optionally units that wrap the compose lifecycle), then retire
+      the foreground supervisor.
+- [ ] TPM secrets in containers. The control-plane containers mount the master
+      key as a file secret. For the TPM backend, either pass `/dev/tpmrm0` into
+      those services and add `tpm2-tools` to the server image, or run the control
+      plane on baremetal. Decide and wire it (`docs/deployment.md` "Secrets").
+- [ ] Production database secrets. `POSTGRES_PASSWORD` defaults to `devonly` and
+      `deploy/initdb` is a dev seed. Set a real password (Docker/OS secret, not
+      committed) and review the init SQL before prod. Alternatively point
+      `HYPROXY_DB_URL` at a managed instance and drop the compose Postgres.
+- [ ] Readiness gating between tiers. `start-prod.sh` waits on compose health
+      checks for the containers, but the baremetal data plane starts immediately
+      after; a slow control-plane start can surface as transient 502s. Poll the
+      IdP/authz loopback ports before starting the data plane.
+- [ ] Pin and track the `guacamole/guacd` image (currently `1.5.5`) and the
+      `node`/`python`/`postgres` base images; add them to whatever CVE/update
+      process the Python and Go dependencies already use.
 
 ## Security posture before opening the public port (docs/production.md section 5)
 

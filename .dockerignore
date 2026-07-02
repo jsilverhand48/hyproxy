@@ -1,0 +1,17 @@
+# Build-context hygiene for the repo-root context (server image).
+.git
+.github
+**/node_modules
+**/__pycache__
+**/.venv
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.hypothesis
+server/.dev
+ui/dist
+dataplane/bin
+**/.env
+*.pyc
+docs
+*.md

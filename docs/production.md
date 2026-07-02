@@ -8,25 +8,29 @@ tested in-repo are noted; the rest are deployment integrations.
 
 ## Bootstrapping and starting
 
+Production runs as a hybrid: the control plane is containerized and the Go data
+plane runs on baremetal. `docs/deployment.md` is the full topology reference.
 Two scripts wrap this runbook:
 
 - `./bootstrap-prod.sh` runs once per deployment. It validates the environment
-  fail-closed, syncs pinned dependencies, applies migrations, ensures signing
-  keys, creates the first admin, registers the `admin-ui` OIDC client, builds
-  the admin UI and the data-plane binary, and runs the audit/vet gates. It
-  stops before the public port is opened and prints the section 5 checklist.
+  fail-closed, builds the container images (the UI is compiled inside the server
+  image), applies migrations, ensures signing keys, creates the first admin, and
+  registers the `admin-ui` OIDC client (all inside containers), builds the
+  baremetal data-plane binary, and runs the audit/vet gates. It stops before the
+  public port is opened and prints the section 5 checklist.
 - `./start-prod.sh` starts the stack on every boot. It hard-requires Docker,
   refuses to start if any dependency, artifact (`dataplane/bin/dataplane`,
-  `ui/dist`), or configuration value (issuer, secrets backend, TLS material) is
-  missing, brings up Postgres under `docker compose`, applies migrations, and
-  launches the loopback IdP/admin/authz services behind the single public data
-  plane. It builds nothing.
+  `dataplane/config.json`), or configuration value (issuer, secrets backend, TLS
+  material) is missing, brings up the containerized Postgres + control plane +
+  guac bridge via `docker compose`, and then starts the baremetal data plane as
+  the single public ingress. It builds nothing.
 
-Sequence for a new deployment: author `server/.env` and
-`dataplane/config.json`, obtain certificates (section 2), run
+Sequence for a new deployment: copy `.env.example` to the repo-root `.env` and
+fill it in, author `dataplane/config.json`, obtain certificates (section 2), run
 `./bootstrap-prod.sh`, complete the section 5 checklist and security review,
-then `./start-prod.sh`. Under a real deployment prefer per-service systemd units
-over the foreground supervisor (see `docs/TODO.md`).
+then `./start-prod.sh`. The containerized services carry compose `restart`
+policies; the baremetal data plane still needs a systemd unit (see
+`docs/deployment.md` and `docs/TODO.md`).
 
 ## 1. TPM-backed master key (secrets broker)
 

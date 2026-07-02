@@ -1,19 +1,204 @@
+# hyproxy hybrid stack.
+#
+# Baremetal (NOT here): the Go data plane. It is the single public TLS ingress,
+# owns the ACME cert files with live hot-reload, and reverse-proxies to the
+# services below over loopback-published ports. See docs/deployment.md.
+#
+# Containerized (here): Postgres, the Python control plane (idp/admin/authz),
+# and the guac bridge (tunnel + guacd). Everything is published on 127.0.0.1
+# only, so nothing is internet-facing; only the host data plane reaches it.
+#
+# Profiles:
+#   (default)  postgres only            -> dev `make up`
+#   tools      migrate + cli one-shots  -> `docker compose run --rm migrate|cli ...`
+#   app        idp + admin + authz      -> `docker compose --profile app up -d`
+#   guac       guacd + tunnel           -> add `--profile guac` when guac is enabled
+#
+# Configuration comes from the repo-root `.env` (compose variable substitution).
+# Copy .env.example to .env and set POSTGRES_PASSWORD, HYPROXY_ISSUER, etc.
+
+name: hyproxy
+
+x-server-build: &server-build
+  context: .
+  dockerfile: server/Dockerfile
+
+# Shared control-plane environment. Env vars take precedence over any baked
+# config, so these pin the containerized topology (service-name DB host, etc.).
+x-server-env: &server-env
+  HYPROXY_DB_URL: postgresql+asyncpg://hyproxy:${POSTGRES_PASSWORD:-devonly}@postgres:5432/hyproxy
+  HYPROXY_ISSUER: ${HYPROXY_ISSUER:-https://idp.localhost:8300}
+  HYPROXY_SECRETS_BACKEND: ${HYPROXY_SECRETS_BACKEND:-file}
+  HYPROXY_MASTER_KEY_FILE: /run/secrets/master_key
+
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
+
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: hyproxy
-      POSTGRES_PASSWORD: devonly
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devonly}
       POSTGRES_DB: hyproxy
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/initdb:/docker-entrypoint-initdb.d
+    networks: [internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hyproxy"]
       interval: 2s
       retries: 20
+    restart: unless-stopped
+
+  # --- one-shot tools (profile: tools) --------------------------------------
+  migrate:
+    profiles: [tools]
+    build: *server-build
+    image: hyproxy-server:local
+    command: ["alembic", "upgrade", "head"]
+    environment: *server-env
+    secrets: [master_key]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: "no"
+
+  # Run management commands, e.g.
+  #   docker compose run --rm cli bootstrap-keys
+  #   docker compose run --rm cli bootstrap-admin --email you@example.com --name "You"
+  #   docker compose run --rm cli create-client --client-id admin-ui --name "Admin UI" --redirect-uri ...
+  cli:
+    profiles: [tools]
+    build: *server-build
+    image: hyproxy-server:local
+    entrypoint: ["python", "-m", "hyproxy.cli"]
+    environment: *server-env
+    secrets: [master_key]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: "no"
+
+  # --- control plane (profile: app) -----------------------------------------
+  idp:
+    profiles: [app]
+    build: *server-build
+    image: hyproxy-server:local
+    command:
+      - uvicorn
+      - hyproxy.idp.app:app
+      - "--host=0.0.0.0"
+      - "--port=8300"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips=*"
+    environment: *server-env
+    secrets: [master_key]
+    ports:
+      - "127.0.0.1:8300:8300"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8300),2).close()"]
+    restart: unless-stopped
+
+  admin:
+    profiles: [app]
+    build: *server-build
+    image: hyproxy-server:local
+    command:
+      - uvicorn
+      - hyproxy.admin.app:app
+      - "--host=0.0.0.0"
+      - "--port=8400"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips=*"
+    environment:
+      <<: *server-env
+      HYPROXY_ADMIN_UI_ORIGIN: ${HYPROXY_ADMIN_UI_ORIGIN:-}
+    secrets: [master_key]
+    ports:
+      - "127.0.0.1:8400:8400"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8400),2).close()"]
+    restart: unless-stopped
+
+  authz:
+    profiles: [app]
+    build: *server-build
+    image: hyproxy-server:local
+    command:
+      - uvicorn
+      - hyproxy.authz.app:app
+      - "--host=0.0.0.0"
+      - "--port=8500"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips=*"
+    environment: *server-env
+    secrets: [master_key]
+    ports:
+      - "127.0.0.1:8500:8500"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8500),2).close()"]
+    restart: unless-stopped
+
+  # --- guac bridge (profile: guac) ------------------------------------------
+  guacd:
+    profiles: [guac]
+    image: guacamole/guacd:1.5.5
+    networks: [internal]   # internal only; reachable from the tunnel, never published
+    restart: unless-stopped
+
+  tunnel:
+    profiles: [guac]
+    build:
+      context: ./tunnel
+      dockerfile: Dockerfile
+    image: hyproxy-tunnel:local
+    environment:
+      PORT: "8600"
+      BIND_HOST: "0.0.0.0"
+      GUACD_HOST: guacd
+      GUACD_PORT: "4822"
+      GUAC_CYPHER_KEY: ${HYPROXY_GUAC_CYPHER_KEY:-}
+    ports:
+      - "127.0.0.1:8600:8600"
+    depends_on:
+      guacd:
+        condition: service_started
+    networks: [internal]
+    restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
 
 volumes:
   pgdata:
+
+secrets:
+  # File secrets backend: the master key is mounted read-only into the control
+  # plane. For the TPM backend, pass the TPM device into these services instead
+  # (see docs/deployment.md) or run the control plane on baremetal.
+  master_key:
+    file: ${HYPROXY_MASTER_KEY_FILE:-./server/.dev/master.keys}
