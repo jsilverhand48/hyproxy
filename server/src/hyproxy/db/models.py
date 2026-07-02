@@ -220,6 +220,17 @@ class AuditLog(Base):
     source_ip: Mapped[str] = mapped_column(INET)
 
 
+class LogShipCursor(Base):
+    """Per-stream high-water mark for off-box log shipping (Phase 5). Append-only
+    export: each stream advances its last shipped BigInteger id."""
+
+    __tablename__ = "log_ship_cursors"
+
+    stream: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_id: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(server_default=NOW)
+
+
 class AuthEvent(Base):
     __tablename__ = "auth_events"
     __table_args__ = (

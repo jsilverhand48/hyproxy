@@ -332,3 +332,51 @@ references are to the v4 MVP specification.
   Everything up to and including the data-plane WebSocket authorization is
   implemented and tested; the guacd hop and browser renderer are the remaining
   live-only pieces. See `ROLLOUT.md` Phase 4 for the exact status.
+
+# Phase 5 Security Notes (internet-exposure hardening)
+
+Full runbook in `docs/production.md`. Security-relevant points:
+
+## Master key: TPM sealing + rotation
+
+- The `SecretsBackend` protocol gains a `TpmSecretsBackend` selected by
+  `HYPROXY_SECRETS_BACKEND=tpm`. Master keys are unsealed from the TPM into
+  memory only; the TPM call is isolated behind an injected `unseal` callable so
+  the adapter is unit-tested without hardware, and the real `tpm2_unseal` wiring
+  is a documented deployment hook (`core/secrets.tpm_unseal`, currently a clear
+  `NotImplementedError`). Invariant: no unsealed key material on disk in prod.
+- Master-key rotation (`core/reencrypt.py`, `rotate-master-key`) re-wraps every
+  sealed blob (signing keys, TOTP secrets, connection secrets) to the current
+  key, decrypt-then-encrypt with the same table-name AAD, in one transaction.
+  This is the zero-downtime file->TPM migration path. Integration-tested:
+  plaintext preserved, idempotent, null secrets skipped.
+
+## Off-box audit shipping
+
+- `audit/shipping.py` streams the three audit tables past a per-stream
+  `log_ship_cursors` high-water mark, projecting EXPLICIT fields (never the ORM
+  row) and flagging high-severity events. The tables are whitelist-detail by
+  construction (Phase 1/2), so shipped records carry no secrets.
+- The cursor advances only after the sink accepts a batch (at-least-once; a
+  failed forwarder re-ships). Concurrency caveat (reviewer item): advancing by
+  max id can skip a row that commits out of id order; a strict pipeline ships
+  with a time-lag window.
+- High-severity set alerts off-box: break-glass login, OIDC code replay, refresh
+  reuse, session stale-IP, step-up failure, admin TOTP reset, data-plane deny.
+
+## DDNS
+
+- The decision core (`ops/ddns.py`) is idempotent and backoff-limited, with the
+  provider API and public-IP lookup behind interfaces (no provider secrets in
+  repo). Unit-tested for changed/unchanged/backoff/no-ip.
+
+## Production posture (must hold before exposure)
+
+- Backend TLS verification enforced (no insecure skip-verify), internal CA
+  pinned; the dev-only `idp_verify_tls=false` retired.
+- Segmentation: admin API, `/authz/check`, `/guac/consume`, the guac tunnel, and
+  guacd are internal; only the public port and out-of-band WireGuard face any
+  network. ACME (a vetted client, not hand-rolled) feeds the cert hot-reload
+  seam; DNS provider creds are sealed.
+- The dedicated security review runs against this document; every dev-only
+  accepted risk must have a production resolution before the port opens.

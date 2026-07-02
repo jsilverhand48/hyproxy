@@ -16,6 +16,12 @@ class Settings(BaseSettings):
 
     db_url: str = "postgresql+asyncpg://hyproxy:devonly@127.0.0.1:5433/hyproxy"
     master_key_file: str = "./.dev/master.keys"
+    # Secrets backend: "file" (dev, key on disk) or "tpm" (production, master key
+    # sealed to the TPM and unsealed into memory only). See core/secrets.py.
+    secrets_backend: str = "file"
+    # Path to the TPM-sealed master-key blob (used only when secrets_backend=tpm;
+    # unsealed via tpm2-tools at startup). See docs/production.md.
+    tpm_sealed_blob: str = ""
 
     @field_validator("db_url")
     @classmethod

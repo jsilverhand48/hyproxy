@@ -30,7 +30,14 @@ consumes the grant on the tunnel WebSocket connect and reverse-proxies it to an
 internal `tunnel/` (guacamole-lite) service that speaks guacd. The in-browser
 client and guacd deployment are the remaining live-only pieces (see `ROLLOUT.md`).
 
-Later phases add the TPM-backed secrets broker and internet-exposure hardening.
+Phase 5 (internet-exposure hardening): the software cores are built and tested,
+the infrastructure is deployment. A TPM secrets backend (unseal isolated behind
+a hook) plus zero-downtime master-key rotation (`rotate-master-key`); an off-box
+audit shipper with severity classification (`ship-logs`); a DDNS decision core;
+and a production-posture checklist. ACME DNS-01 uses a vetted client (lego/
+certbot) feeding the data plane's existing cert hot-reload seam. See
+`docs/production.md`.
+
 See `ROLLOUT.md` for the phase-by-phase instructions.
 
 ## Layout

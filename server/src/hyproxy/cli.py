@@ -128,6 +128,27 @@ def create_client(client_id: str, client_name: str, redirect_uris: tuple[str, ..
     click.echo(f"registered client {client_id}")
 
 
+@cli.command("rotate-master-key")
+def rotate_master_key() -> None:
+    """Re-wrap every sealed blob under the current master key.
+
+    Run after a new master key becomes current (e.g. migrating from the file
+    backend to the TPM-sealed key): add the new key, then rotate so all TOTP
+    secrets, signing keys, and connection secrets are re-encrypted to it."""
+    from hyproxy.core.reencrypt import rotate_to_current
+
+    backend = get_secrets_backend()
+
+    async def do(session: AsyncSession) -> Any:
+        return await rotate_to_current(session, backend)
+
+    result = run_db(do)
+    per_table = ", ".join(f"{t}={n}" for t, n in result.rewrapped.items())
+    click.echo(
+        f"re-wrapped {result.total} blobs to master key {result.target_key_id} ({per_table})"
+    )
+
+
 @cli.command("gen-guac-key")
 def gen_guac_key() -> None:
     """Generate a base64 32-byte AES-256-CBC key for the Guacamole broker.
@@ -138,6 +159,26 @@ def gen_guac_key() -> None:
     import secrets as _secrets
 
     click.echo(base64.b64encode(_secrets.token_bytes(32)).decode())
+
+
+@cli.command("ship-logs")
+@click.option("--batch-size", default=500, show_default=True)
+def ship_logs(batch_size: int) -> None:
+    """Ship new audit rows off-box as JSON lines on stdout (cron it).
+
+    Pipe stdout to your syslog/OTLP forwarder; the per-stream cursor advances
+    only after the batch is written, so a failed pipe re-ships (at-least-once).
+    The summary and high-severity count go to stderr."""
+    from hyproxy.audit.shipping import JsonLinesSink, ship
+
+    sink = JsonLinesSink()
+
+    async def do(session: AsyncSession) -> Any:
+        return await ship(session, sink, batch_size=batch_size)
+
+    result = run_db(do)
+    per = ", ".join(f"{s}={n}" for s, n in result.shipped.items())
+    click.echo(f"shipped {result.total} ({per}); {result.high_severity} high-severity", err=True)
 
 
 @cli.command("gc")

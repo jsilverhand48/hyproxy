@@ -215,12 +215,28 @@ M5. Hardening + docs. Idle/absolute TTLs also tear down tunnels; per-protocol
 
 ---
 
-## Phase 5: Internet exposure hardening (DDNS, ACME, TPM broker, off-box logs, final security review)
+## Phase 5: Internet exposure hardening (DDNS, ACME, TPM broker, off-box logs, final security review) — CORES BUILT
 
 Goal (spec section 10 / 11): everything required before the single public port
 faces the internet. Nothing here changes application behavior; it replaces
 dev-only stand-ins with production-grade infrastructure behind the seams already
 built, then runs the dedicated security review.
+
+Status (software cores built + tested; infra is deployment, see
+`docs/production.md`):
+- M1 TPM broker: `TpmSecretsBackend` adapter (unseal isolated, unit-tested) +
+  `HYPROXY_SECRETS_BACKEND` selector + master-key rotation (`core/reencrypt.py`,
+  `rotate-master-key`, integration-tested). The `tpm2_unseal` wiring is a
+  documented deployment hook (needs a TPM, absent here).
+- M2 ACME DNS-01: seam only (data-plane cert hot-reload already exists). Use a
+  vetted client (lego/certbot); do not hand-roll ACME. Documented.
+- M3 DDNS: decision core (`ops/ddns.py`, unit-tested); provider adapter is
+  deployment. Documented.
+- M4 off-box logging: shipper (`audit/shipping.py`, `ship-logs`, cursor table)
+  + severity classification, tested. Syslog/OTLP forwarder + SIEM alerts are
+  deployment. Documented.
+- M5 production posture + final review: `docs/production.md` checklist; the
+  review itself is a process to run before exposure.
 
 ### Seams already in place
 

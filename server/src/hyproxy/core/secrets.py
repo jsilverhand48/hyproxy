@@ -6,6 +6,7 @@ broker implements the same protocol; nothing else in the codebase changes.
 
 import base64
 import secrets
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
@@ -21,30 +22,33 @@ class SecretsBackend(Protocol):
     def get_master_key(self, key_id: str) -> bytes: ...
 
 
-class FileSecretsBackend:
-    """Reads `key_id:base64key` lines; the last line is the current key.
+def parse_master_keys(text: str) -> tuple[dict[str, bytes], str]:
+    """Parse `key_id:base64key` lines; the last non-comment line is current."""
+    keys: dict[str, bytes] = {}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key_id, _, b64 = line.partition(":")
+        key = base64.b64decode(b64)
+        if len(key) != MASTER_KEY_BYTES:
+            raise ValueError(f"master key {key_id!r} is not {MASTER_KEY_BYTES} bytes")
+        keys[key_id] = key
+        current = key_id
+    if current is None:
+        raise ValueError("no master keys found")
+    return keys, current
 
-    Dev-only. Production replaces this with the TPM-backed broker (Phase 5).
-    """
 
-    def __init__(self, path: Path) -> None:
-        self._keys: dict[str, bytes] = {}
-        self._current: str | None = None
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            key_id, _, b64 = line.partition(":")
-            key = base64.b64decode(b64)
-            if len(key) != MASTER_KEY_BYTES:
-                raise ValueError(f"master key {key_id!r} is not {MASTER_KEY_BYTES} bytes")
-            self._keys[key_id] = key
-            self._current = key_id
-        if self._current is None:
-            raise ValueError(f"no master keys found in {path}")
+class _MapBackend:
+    """Shared key store: serves keys by id and names the current one."""
+
+    def __init__(self, keys: dict[str, bytes], current: str) -> None:
+        self._keys = keys
+        self._current = current
 
     def current_key_id(self) -> str:
-        assert self._current is not None
         return self._current
 
     def get_master_key(self, key_id: str) -> bytes:
@@ -52,6 +56,47 @@ class FileSecretsBackend:
             return self._keys[key_id]
         except KeyError:
             raise KeyError(f"unknown master key id {key_id!r}") from None
+
+
+class FileSecretsBackend(_MapBackend):
+    """Reads `key_id:base64key` lines; the last line is the current key.
+
+    Dev-only: the master key sits on disk (chmod 600). Production uses the
+    TPM-backed broker below.
+    """
+
+    def __init__(self, path: Path) -> None:
+        keys, current = parse_master_keys(path.read_text())
+        super().__init__(keys, current)
+
+
+class TpmSecretsBackend(_MapBackend):
+    """Master keys unsealed from the TPM at process start into memory only.
+
+    The unsealed payload is the SAME `key_id:base64` format as the file backend,
+    but it is sealed to the TPM under a PCR policy and never touches disk in
+    cleartext. The TPM interaction is isolated behind the injected `unseal`
+    callable (returns the key text), so this adapter is testable without
+    hardware; production wires `unseal` to `tpm2_unseal` (see `tpm_unseal`).
+    """
+
+    def __init__(self, unseal: Callable[[], str]) -> None:
+        keys, current = parse_master_keys(unseal())
+        super().__init__(keys, current)
+
+
+def tpm_unseal() -> str:
+    """Unseal the master-key blob from the TPM (production only).
+
+    Deployment-specific: unseal `HYPROXY_TPM_SEALED_BLOB` under the configured
+    PCR policy via tpm2-tools (`tpm2_unseal`) or tpm2-pytss, returning the
+    `key_id:base64` text. Not implemented in-repo because it requires a TPM,
+    which the dev machine lacks; wire it at deploy time.
+    """
+    raise NotImplementedError(
+        "TPM unseal is a deployment integration point; see docs/security-notes.md "
+        "(Phase 5) and provide tpm2_unseal wiring"
+    )
 
 
 def generate_master_key_file(path: Path) -> str:
@@ -69,4 +114,7 @@ def generate_master_key_file(path: Path) -> str:
 
 @lru_cache
 def get_secrets_backend() -> SecretsBackend:
-    return FileSecretsBackend(Path(get_settings().master_key_file))
+    settings = get_settings()
+    if settings.secrets_backend == "tpm":
+        return TpmSecretsBackend(tpm_unseal)
+    return FileSecretsBackend(Path(settings.master_key_file))
