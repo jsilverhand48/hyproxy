@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Use your passkey{% endblock %}
+{% block content %}
+<h1>Use your passkey</h1>
+<p>Confirm your identity with your security key or platform authenticator.</p>
+<p class="error" id="webauthn-error" hidden></p>
+<form id="webauthn-form" data-mode="login" data-flow="{{ flow_id }}" data-csrf="{{ csrf_token }}">
+  <button type="submit">Continue with passkey</button>
+</form>
+<script src="/static/js/webauthn.js"></script>
+{% endblock %}

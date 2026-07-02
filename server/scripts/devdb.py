@@ -7,7 +7,7 @@ initdb/pg_ctl over a unix socket. No root required.
 Usage:
     uv run python scripts/devdb.py start   # download if needed, init, start, print URLs
     uv run python scripts/devdb.py stop
-    uv run python scripts/devdb.py url     # print SQLAlchemy URL for hyproxy_DB_URL
+    uv run python scripts/devdb.py url     # print SQLAlchemy URL for HYPROXY_DB_URL
     uv run python scripts/devdb.py status
 """
 
@@ -137,8 +137,8 @@ def main() -> int:
     if cmd == "url":
         print(sqlalchemy_url("hyproxy"))
     else:
-        print("dev:  hyproxy_DB_URL=" + sqlalchemy_url("hyproxy"))
-        print("test: hyproxy_TEST_DB_URL=" + sqlalchemy_url("hyproxy_test"))
+        print("dev:  HYPROXY_DB_URL=" + sqlalchemy_url("hyproxy"))
+        print("test: HYPROXY_TEST_DB_URL=" + sqlalchemy_url("hyproxy_test"))
     return 0
 
 

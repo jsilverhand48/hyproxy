@@ -5,3 +5,9 @@
 .ruff_cache
 .venv/
 .env
+__pycache__/
+
+.env
+*.pyc
+*.pyo
+*.pyd

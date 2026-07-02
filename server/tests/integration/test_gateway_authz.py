@@ -5,15 +5,15 @@
 import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 import pyotp
 import pytest
-from helpers import create_user, enroll_confirmed_totp, extract_form_fields
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from helpers import create_user, enroll_confirmed_totp, extract_form_fields
 from hyproxy.authz.app import create_app as create_authz_app
 from hyproxy.config import get_settings
 from hyproxy.core import keys as key_service
@@ -196,9 +196,7 @@ async def test_full_gateway_login_and_allow(
     assert body["headers"]["X-Auth-User-Id"] == user.external_id
     assert body["headers"]["X-Auth-Roles"]
 
-    audits = (
-        await db.scalars(select(AuditLog).where(AuditLog.resource_id == resource.id))
-    ).all()
+    audits = (await db.scalars(select(AuditLog).where(AuditLog.resource_id == resource.id))).all()
     assert any(a.decision == "allow" and a.user_id == user.id for a in audits)
 
 
@@ -243,22 +241,16 @@ async def test_path_scoping_and_explicit_deny(
         authz_client, idp_client, db, make_password_hash, secrets_backend
     )
     await grant(db, user, resource, allowed_paths=["/photos"])
-    assert (await check(authz_client, cookie=cookie, uri="/photos/1")).json()[
-        "decision"
-    ] == "allow"
+    assert (await check(authz_client, cookie=cookie, uri="/photos/1")).json()["decision"] == "allow"
     assert (await check(authz_client, cookie=cookie, uri="/admin")).json()["decision"] == "deny"
 
     await grant(db, user, resource, action="deny", allowed_paths=["/photos/private"])
-    assert (await check(authz_client, cookie=cookie, uri="/photos/1")).json()[
-        "decision"
-    ] == "allow"
+    assert (await check(authz_client, cookie=cookie, uri="/photos/1")).json()["decision"] == "allow"
     denied = await check(authz_client, cookie=cookie, uri="/photos/private/x")
     assert denied.json()["decision"] == "deny" and denied.json()["reason"] == "explicit_deny"
 
 
-async def test_unknown_host_denied(
-    authz_client: httpx.AsyncClient, db: AsyncSession
-) -> None:
+async def test_unknown_host_denied(authz_client: httpx.AsyncClient, db: AsyncSession) -> None:
     resp = await check(authz_client, host="ghost.local.test")
     assert resp.json() == {
         "decision": "deny",
@@ -336,9 +328,7 @@ async def test_callback_state_single_use(
     secret = await enroll_confirmed_totp(db, secrets_backend, user)
     _ = resource
 
-    start = await authz_client.get(
-        "/gateway/start", params={"rd": f"https://{APP_HOST}/x"}
-    )
+    start = await authz_client.get("/gateway/start", params={"rd": f"https://{APP_HOST}/x"})
     parts = urlsplit(start.headers["location"])
     resp = await idp_client.get(f"{parts.path}?{parts.query}")
     page = await idp_client.get(resp.headers["location"])

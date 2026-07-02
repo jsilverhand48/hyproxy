@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Set up authenticator{% endblock %}
+{% block content %}
+<h1>Set up your authenticator</h1>
+<p>Add this account to your authenticator app, then confirm with a code.</p>
+<p>Setup key:</p>
+<code class="block">{{ secret }}</code>
+<p>Or use this link on the device with your authenticator:</p>
+<code class="block">{{ otpauth_uri }}</code>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/auth/enroll/totp">
+  <input type="hidden" name="flow" value="{{ flow_id }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label for="code">Code from your app</label>
+  <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code"
+         pattern="[0-9]*" required autofocus>
+  <button type="submit">Confirm</button>
+</form>
+{% endblock %}

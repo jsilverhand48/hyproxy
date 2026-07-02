@@ -19,8 +19,14 @@ ROLE_A = uuid.uuid4()
 ROLE_B = uuid.uuid4()
 
 
-def ev(rules: list[PolicyRule], *, roles: frozenset[uuid.UUID] | None = None, port: int = 443,
-       path: str = "/", now: datetime = NOW) -> Decision:
+def ev(
+    rules: list[PolicyRule],
+    *,
+    roles: frozenset[uuid.UUID] | None = None,
+    port: int = 443,
+    path: str = "/",
+    now: datetime = NOW,
+) -> Decision:
     return evaluate(
         rules,
         user_role_ids=roles if roles is not None else frozenset({ROLE_A}),
@@ -93,7 +99,9 @@ def test_scoped_deny_only_applies_where_it_matches() -> None:
 
 
 def test_time_window_inside_and_outside() -> None:
-    windowed = allow(conditions={"time_windows": [{"days": ["wed"], "start": "08:00", "end": "17:00"}]})
+    windowed = allow(
+        conditions={"time_windows": [{"days": ["wed"], "start": "08:00", "end": "17:00"}]}
+    )
     assert ev([windowed]).allowed  # Wednesday noon
     late = NOW.replace(hour=23)
     assert not ev([windowed], now=late).allowed
@@ -151,9 +159,7 @@ def test_property_deny_never_overridden(
     applicable = [
         r
         for r in rules
-        if rule_applies(
-            r, user_role_ids=roles, resource_id=RESOURCE, port=port, path=path, now=NOW
-        )
+        if rule_applies(r, user_role_ids=roles, resource_id=RESOURCE, port=port, path=path, now=NOW)
     ]
     if any(r.action == "deny" for r in applicable):
         assert not decision.allowed and decision.reason == "explicit_deny"
@@ -169,9 +175,7 @@ def test_property_allow_requires_applicable_allow_and_no_deny(
     applicable = [
         r
         for r in rules
-        if rule_applies(
-            r, user_role_ids=roles, resource_id=RESOURCE, port=port, path=path, now=NOW
-        )
+        if rule_applies(r, user_role_ids=roles, resource_id=RESOURCE, port=port, path=path, now=NOW)
     ]
     has_allow = any(r.action == "allow" for r in applicable)
     has_deny = any(r.action == "deny" for r in applicable)

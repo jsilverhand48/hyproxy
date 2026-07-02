@@ -67,6 +67,19 @@ run-admin:
 run-authz:
 	$(UV) uvicorn hyproxy.authz.app:app --host 127.0.0.1 --port 8500
 
+## --- Data plane (Go) --------------------------------------------------------
+dp-build:
+	cd dataplane && go build -o bin/dataplane ./cmd/dataplane
+
+dp-test:
+	cd dataplane && gofmt -l . && go vet ./... && go test ./...
+
+dp-fuzz:
+	cd dataplane && go test ./internal/routing -fuzz=FuzzNormalizeHost -fuzztime=30s
+
+dp-run: dp-build
+	cd dataplane && ./bin/dataplane -config config.example.json
+
 ## --- Quality --------------------------------------------------------------
 lint:
 	$(UV) ruff check src tests scripts

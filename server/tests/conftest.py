@@ -17,7 +17,7 @@ _DEV_SOCKET = Path(__file__).resolve().parent.parent / ".dev" / "pgsocket"
 
 
 def test_db_url() -> str | None:
-    url = os.environ.get("hyproxy_TEST_DB_URL")
+    url = os.environ.get("HYPROXY_TEST_DB_URL")
     if url:
         return url
     if _DEV_SOCKET.exists():
@@ -28,7 +28,7 @@ def test_db_url() -> str | None:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     if test_db_url() is not None:
         return
-    skip = pytest.mark.skip(reason="no test database (set hyproxy_TEST_DB_URL or make db-up)")
+    skip = pytest.mark.skip(reason="no test database (set HYPROXY_TEST_DB_URL or make db-up)")
     for item in items:
         if "integration" in item.keywords or "e2e" in item.keywords:
             item.add_marker(skip)

@@ -111,5 +111,91 @@ references are to the v4 MVP specification.
 
 - Off-box log shipping and alerting (Phase 5).
 - TPM-backed secrets broker (Phase 5).
-- Rate limiting at the network edge, connection limits (data plane, Phase 2).
 - NTP monitoring (deployment concern; TOTP and token expiry depend on it).
+
+# Phase 2 Security Notes (data plane + policy engine)
+
+## Policy engine (`hyproxy.policy.engine`)
+
+- Pure functions over dataclasses; no ORM. Decision order: among applicable
+  rules (enabled, matching resource, role held, port/path/time conditions
+  satisfied) an explicit deny always wins; absent an applicable allow, default
+  deny. Verified by Hypothesis properties: deny never overridden, allow
+  requires an applicable allow and no deny, default-deny holds for unmatched
+  requests, and disabled rules never change the outcome.
+- Path matching is segment-aware (`/web` matches `/web` and `/web/x`, not
+  `/webby`). Time windows are UTC, support midnight crossing, and fail closed
+  on malformed input.
+
+## ext-authz decision point (`/authz/check`)
+
+- The single authorization decision point for the data plane; transport
+  agnostic (spec section 2/5). Internal-only: never expose /authz/check to
+  clients (the data plane only proxies the auth host's /gateway/* paths to
+  this service, nothing else).
+- Resolves the routing key (Host) to a registered, enabled resource
+  `public_host`; unknown hosts are denied without touching any backend.
+- No live gateway session -> `auth_required` with a redirect to the gateway
+  login (open-redirect-safe: the return URL host must itself be a registered
+  resource; only https is accepted).
+- Every decision writes an `audit_log` row (user, resource, port, decision,
+  reason, source_ip) in the same transaction.
+- Identity headers returned to the data plane: X-Forwarded-User (email),
+  X-Auth-User-Id (external_id), X-Auth-Roles (comma-joined role names).
+
+## Gateway RP (the data plane's OIDC client)
+
+- Server-side DPoP key derived deterministically from the master key via HKDF
+  (stable jkt across restarts, nothing on disk). This is the one RP whose DPoP
+  key is server-side; browser RPs keep theirs in WebCrypto.
+- /gateway/start parks a single-use, IP-bound, 10-min state (PKCE verifier +
+  nonce + validated return URL) and redirects to the IdP authorize endpoint.
+- /gateway/callback exchanges the code with a DPoP proof, verifies the access
+  and ID tokens against the shared signing keys, checks the ID-token nonce,
+  and links a gateway session to the underlying IdP session. Liveness,
+  revocation, source-IP binding, idle and 6h absolute bounds are all inherited
+  from the IdP session on every /authz/check, so revoking the IdP session
+  immediately cuts data-plane access (covered by the cross-plane E2E).
+- Gateway cookie is `__Secure-` prefixed, Secure/HttpOnly/SameSite=Lax; its
+  Domain must be the parent of all app subdomains so it is presented to every
+  resource (dev/E2E use `.home.test`). `__Host-` is not usable here precisely
+  because a Domain is required.
+
+## Go data plane
+
+- Single public port, TLS termination (1.2 floor, 1.3 preferred) with a
+  GetCertificate hot-reload seam (the ACME slot for Phase 5). Pluggable
+  listener interface (spec section 12) so a future raw-L4 transport is a new
+  listener, not a redesign.
+- Host normalization (lowercase, strip port/trailing dot, DNS-label
+  validation, IPv6 literals rejected since IPv6 is disabled at the edge) is
+  the sole attacker-controlled parser and is fuzzed (FuzzNormalizeHost);
+  unknown/hostile hosts get 421 with an empty body (reveal nothing, route
+  nowhere).
+- SSRF invariant: backends come only from the static config route table keyed
+  by normalized Host; the dial target is never derived from client input
+  (request target, path, or headers). Tested.
+- Identity-header hygiene: X-Forwarded-User / X-Auth-User-Id / X-Auth-Roles
+  are stripped from every inbound request unconditionally before anything
+  else, then set only from the authz allow response. X-Forwarded-* is rebuilt
+  by the proxy (no inbound spoof passthrough). The gateway cookie is removed
+  from the upstream Cookie header so backends never see gateway credentials.
+- Fail closed: if the control plane is unreachable, the request is refused
+  (503), never proxied.
+- auth_required is a 302 to the gateway only for safe (GET/HEAD) navigations;
+  other methods get 401 so non-idempotent requests are not silently bounced.
+
+## Phase 2 accepted risks / reviewer items
+
+- The data plane trusts the network path to the authz service (loopback or a
+  private segment); /authz/check has no auth of its own by design and must
+  never be reachable from clients. Enforce with network segmentation
+  (spec section 11) plus the auth-host path allowlist already in the proxy.
+- The gateway backchannel to the IdP uses `idp_verify_tls=false` only for the
+  dev self-signed cert; production must verify (internal CA) or use a verified
+  endpoint.
+- Backend re-encryption/verification (spec section 11: no insecure skip
+  verify) is a deployment concern for https backends; the proxy dials whatever
+  scheme the route specifies. Pin/trust internal CA before enabling https
+  backends.
+- gc now also clears expired gateway_login_states.

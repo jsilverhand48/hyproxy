@@ -1,0 +1,11 @@
+:root { font-family: system-ui, sans-serif; }
+body { display: flex; justify-content: center; align-items: center; min-height: 100vh;
+       margin: 0; background: #f2f4f7; }
+.card { background: #fff; padding: 2rem; border-radius: 8px; min-width: 320px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+label { display: block; margin-top: 1rem; font-size: .9rem; }
+input { width: 100%; padding: .5rem; margin-top: .25rem; box-sizing: border-box; }
+button { margin-top: 1.5rem; width: 100%; padding: .6rem; }
+.error { color: #b3261e; }
+code.block { display: block; padding: .75rem; background: #f6f6f6; margin: .5rem 0;
+             word-break: break-all; }
