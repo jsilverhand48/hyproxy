@@ -6,6 +6,28 @@ production-grade infrastructure behind the seams the earlier phases left, then
 runs the dedicated security review. Software cores that could be built and
 tested in-repo are noted; the rest are deployment integrations.
 
+## Bootstrapping and starting
+
+Two scripts wrap this runbook:
+
+- `./bootstrap-prod.sh` runs once per deployment. It validates the environment
+  fail-closed, syncs pinned dependencies, applies migrations, ensures signing
+  keys, creates the first admin, registers the `admin-ui` OIDC client, builds
+  the admin UI and the data-plane binary, and runs the audit/vet gates. It
+  stops before the public port is opened and prints the section 5 checklist.
+- `./start-prod.sh` starts the stack on every boot. It hard-requires Docker,
+  refuses to start if any dependency, artifact (`dataplane/bin/dataplane`,
+  `ui/dist`), or configuration value (issuer, secrets backend, TLS material) is
+  missing, brings up Postgres under `docker compose`, applies migrations, and
+  launches the loopback IdP/admin/authz services behind the single public data
+  plane. It builds nothing.
+
+Sequence for a new deployment: author `server/.env` and
+`dataplane/config.json`, obtain certificates (section 2), run
+`./bootstrap-prod.sh`, complete the section 5 checklist and security review,
+then `./start-prod.sh`. Under a real deployment prefer per-service systemd units
+over the foreground supervisor (see `docs/TODO.md`).
+
 ## 1. TPM-backed master key (secrets broker)
 
 Seam: the `SecretsBackend` protocol (`core/secrets.py`). `FileSecretsBackend` is

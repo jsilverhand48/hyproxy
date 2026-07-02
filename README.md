@@ -66,6 +66,29 @@ browser --TLS--> data plane (:443) --Host routing--> forward-auth (/authz/check)
 gateway RP (OIDC code+PKCE, DPoP) --> IdP login       allowlisted backend
 ```
 
+## Scripts
+
+Three top-level orchestration scripts wrap the `make` targets end to end:
+
+- `./run.sh` starts the whole stack for local development: database, migrations,
+  dev keys/certs, admin UI, Go data plane, then IdP + admin + authz + data plane
+  together. Ctrl-C stops all of them. Toggles: `SKIP_UI=1`, `FORCE_UI=1`,
+  `WITH_TUNNEL=1`.
+- `./bootstrap-prod.sh` performs the one-time first-run production setup
+  (dependency sync, migrations, signing keys, first admin, OIDC clients, UI +
+  data-plane build) and then STOPS short of opening the public port. It is
+  fail-closed, refuses dev-looking configuration, and never self-signs certs.
+  Run it once per deployment.
+- `./start-prod.sh` starts the stack in production. It hard-requires Docker
+  (aborts if absent), fail-closes on any missing production dependency,
+  artifact, or config value, runs Postgres under `docker compose`, applies
+  migrations, and launches the loopback services behind the single public data
+  plane. It builds nothing and relaxes nothing.
+
+Production first run: fill in `server/.env` and `dataplane/config.json`, run
+`./bootstrap-prod.sh`, complete the `docs/production.md` section 5 checklist,
+then `./start-prod.sh`. See `docs/TODO.md` for open work and known gaps.
+
 ## Dev quickstart
 
 Requires [uv](https://docs.astral.sh/uv/). Docker is optional: with Docker,
