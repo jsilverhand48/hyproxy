@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Recovery code{% endblock %}
+{% block content %}
+<h1>Use a recovery code</h1>
+<p>Enter one of your one-time recovery codes. Afterwards you will set up a new
+authenticator and receive fresh codes.</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/auth/recovery">
+  <input type="hidden" name="flow" value="{{ flow_id }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label for="code">Recovery code</label>
+  <input id="code" name="code" autocomplete="off" required autofocus>
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

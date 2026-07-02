@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Recovery codes{% endblock %}
+{% block content %}
+<h1>Save your recovery codes</h1>
+<p>Each code works once. Store them somewhere safe; they are shown only now.</p>
+<ul>
+  {% for code in codes %}<li><code>{{ code }}</code></li>{% endfor %}
+</ul>
+{% if continue_url %}
+<p><a href="{{ continue_url }}">Continue to your application</a></p>
+{% else %}
+<p>You are signed in.</p>
+{% endif %}
+{% endblock %}

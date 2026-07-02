@@ -1,0 +1,115 @@
+# Phase 1 Security Notes (input to the dedicated security review)
+
+Running record of the security-relevant decisions, invariants, and accepted
+risks in the Phase 1 codebase (control plane + self-built OIDC IdP). Spec
+references are to the v4 MVP specification.
+
+## Cryptography and storage
+
+- All JOSE operations via joserfc; argon2id via argon2-cffi; TOTP via pyotp;
+  WebAuthn via py_webauthn. No hand-rolled primitives anywhere.
+- Passwords and recovery codes: argon2id (verify-only, low entropy).
+- Auth codes, refresh tokens, session cookie secrets: SHA-256 of full-entropy
+  random values; plaintext never stored (`core/crypto.py`).
+- TOTP secrets and OIDC signing private keys: AES-256-GCM under a master key
+  from the SecretsBackend protocol, table name as AAD, ciphertext stored with
+  the encrypting key id (`core/secrets.py`, `core/crypto.py`). The Phase 5
+  TPM broker replaces FileSecretsBackend behind the same protocol.
+- Signing keys: ES256/P-256, publish-overlap-retire lifecycle with a partial
+  unique index enforcing exactly one active key (`core/keys.py`).
+
+## OIDC / OAuth invariants (enforced + tested)
+
+- authorize validation order: client_id, then byte-exact redirect_uri, both
+  failing to a LOCAL page; only then redirect-based errors. state (16..512)
+  and nonce required; PKCE S256 only, `plain` rejected.
+- Auth codes: 60s TTL, single-use via conditional UPDATE; replay of a
+  consumed code revokes the issuing session and emits
+  `oidc.code.replay_detected`.
+- PKCE: S256 constant-time compare; verifier charset/length per RFC 7636.
+- DPoP (RFC 9449): ES256-only allowlist; embedded JWK must be a public P-256
+  key with no private members and no kid/x5c trust shortcuts; htm/htu
+  normalization per RFC; iat window 300s past / 30s future; ath binding on
+  resource calls; RFC 7638 jkt binding; per-jkt jti replay cache in Postgres.
+- Sessions pin their DPoP key at first token exchange (immutable after);
+  refresh proofs must match the family's jkt.
+- Refresh rotation: single-use tokens, family-tracked; reuse revokes the
+  family AND the session; family expiry capped at the session's 6h absolute
+  bound.
+- Every resource-side consumer runs `sessions.check_request`: JWT signature
+  (active+retiring kids), iss/exp, DPoP proof + ath + jkt, then a session
+  liveness lookup (revoked/stale/absolute/idle/IP-binding). Revocation is
+  therefore immediate despite JWTs.
+- Revocation endpoint requires a proof with the token's bound key, so leaked
+  token strings cannot be used for third-party revocation DoS; unknown tokens
+  still return 200 (no validity oracle).
+
+## Authentication tiers and login flow
+
+- `users.auth_tier` is first-class and drives the second factor at login
+  time; no request parameter can select the method; admins are never offered
+  TOTP (enrollment endpoints reject admin-tier users).
+- Login flow is a server-side state machine (login_flows) bound to source IP
+  and a `__Host-` cookie, with per-flow rotating CSRF tokens (hash stored).
+- Unknown-user password attempts burn a dummy argon2 verify (timing).
+- WebAuthn bootstrap enrollment during login is allowed only while the user
+  has no credential predating the flow; otherwise a password-only attacker
+  could enroll their own authenticator.
+- Step-up: sensitive admin actions need a WebAuthn assertion within the last
+  5 minutes regardless of session age.
+- Recovery codes: ~50 bits, shown once, argon2id-hashed, batch-invalidated;
+  use forces TOTP re-enrollment before login completes. No email/SMS paths.
+
+## Session hardening
+
+- Source-IP binding: IP change marks the session stale and everything
+  (cookie, access token via check_request, refresh) fails until full re-auth.
+- Layered TTLs: access 10 min; refresh family absolute 6h; idle 30 min
+  (enforced at cookie use, resource calls, and refresh); step-up 5 min.
+- Progressive delays, never lockout: account scope 3 free failures then
+  2^n capped 60s; IP scope 10 free then capped 30s; checks run before
+  credential evaluation to bound argon2 spend.
+
+## Web appsec
+
+- CSP `default-src 'none'` with explicit self allowances, no inline scripts;
+  nosniff; Referrer-Policy no-referrer; X-Frame-Options DENY; HSTS;
+  Cache-Control no-store on the auth surface (JWKS keeps its max-age).
+- Cookies: `__Host-` prefix, Secure, HttpOnly, SameSite=Lax.
+- JSON endpoints (WebAuthn/step-up) rely on SameSite + JSON content type;
+  cross-origin HTML forms cannot produce these requests.
+
+## Audit
+
+- auth_events written in the same transaction as the state change they
+  describe; detail is whitelisted-keys-only and never carries secrets
+  (enforced by tests). Admin mutations write policy_changes with actor and
+  before/after. Off-box shipping is Phase 5.
+
+## Accepted residual risks (spec-acknowledged)
+
+- TOTP tier is phishable via AITM relay; a relayed login yields the attacker
+  a DPoP-bound session on their device. Accepted for standard users at this
+  user count; admins are WebAuthn-only (origin-bound, phishing-resistant).
+- Roaming users re-authenticate on public-IP change (deliberate tradeoff).
+- Dev-only FileSecretsBackend keeps the master key on disk (chmod 600);
+  replaced by the TPM broker in Phase 5 before internet exposure.
+- The `sub` claim uses users.external_id; deleting a user cascades their
+  sessions/tokens immediately.
+
+## Items for the reviewer to probe
+
+- login_flows lifecycle: expiry, IP binding, stage transitions, CSRF rotation.
+- check_request htu handling on the admin API (uses the request URL; the
+  admin plane is never behind a proxy by policy).
+- Throttle race behavior under concurrent failures (row-locked upsert).
+- GC coverage: dpop_jti_seen and retiring keys via `hyproxy.cli gc`
+  (cron it); login_flows and expired auth_codes rely on natural expiry checks
+  but rows should also be GC'd eventually (cosmetic, not security).
+
+## Not in Phase 1 (tracked for later phases)
+
+- Off-box log shipping and alerting (Phase 5).
+- TPM-backed secrets broker (Phase 5).
+- Rate limiting at the network edge, connection limits (data plane, Phase 2).
+- NTP monitoring (deployment concern; TOTP and token expiry depend on it).

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Enroll passkeys{% endblock %}
+{% block content %}
+<h1>Enroll your passkeys</h1>
+<p>Admin accounts sign in with passkeys. Enroll at least two authenticators
+(a primary and a backup), then continue to verification.</p>
+<p>Enrolled so far: <strong id="enrolled-count">{{ enrolled }}</strong></p>
+<p class="error" id="webauthn-error" hidden></p>
+<form id="webauthn-form" data-mode="enroll" data-flow="{{ flow_id }}" data-csrf="{{ csrf_token }}">
+  <label for="friendly_name">Name for this authenticator</label>
+  <input id="friendly_name" name="friendly_name" required maxlength="64">
+  <label><input type="checkbox" id="break_glass" name="break_glass"> Break-glass key
+    (offline recovery key kept in a safe)</label>
+  <button type="submit">Enroll authenticator</button>
+</form>
+<p><a href="/auth/webauthn?flow={{ flow_id }}">Done enrolling: continue to verification</a></p>
+<script src="/static/js/webauthn.js"></script>
+{% endblock %}

@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: hyproxy
+      POSTGRES_PASSWORD: devonly
+      POSTGRES_DB: hyproxy
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/initdb:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hyproxy"]
+      interval: 2s
+      retries: 20
+
+volumes:
+  pgdata:

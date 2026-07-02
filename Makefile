@@ -1,0 +1,95 @@
+SHELL := /bin/bash
+SERVER := server
+UV := cd $(SERVER) && uv run
+
+.PHONY: up down db-up db-down db-migrate db-revision gen-keys run-idp run-admin \
+        bootstrap-admin create-client rotate-key gc lint fmt typecheck \
+        test test-integration test-e2e check audit
+
+## --- Dev database ---------------------------------------------------------
+# Preferred: Docker Compose. Fallback (no Docker): pgserver via scripts/devdb.py.
+up:
+	@if command -v docker >/dev/null 2>&1; then \
+		docker compose up -d --wait; \
+	else \
+		echo "docker not found; using pgserver fallback"; \
+		$(MAKE) db-up; \
+	fi
+
+down:
+	@if command -v docker >/dev/null 2>&1; then \
+		docker compose down; \
+	else \
+		$(MAKE) db-down; \
+	fi
+
+db-up:
+	$(UV) python scripts/devdb.py start
+
+db-down:
+	$(UV) python scripts/devdb.py stop
+
+## --- Database schema ------------------------------------------------------
+db-migrate:
+	$(UV) alembic upgrade head
+
+db-revision:
+	$(UV) alembic revision --autogenerate -m "$(m)"
+
+## --- Keys and bootstrap ---------------------------------------------------
+gen-keys:
+	$(UV) python -m hyproxy.cli gen-keys
+
+gen-certs:
+	$(UV) python scripts/gen_dev_certs.py
+
+rotate-key:
+	$(UV) python -m hyproxy.cli rotate-signing-key $(args)
+
+bootstrap-admin:
+	$(UV) python -m hyproxy.cli bootstrap-admin $(args)
+
+create-client:
+	$(UV) python -m hyproxy.cli create-client $(args)
+
+gc:
+	$(UV) python -m hyproxy.cli gc
+
+## --- Run ------------------------------------------------------------------
+run-idp:
+	$(UV) uvicorn hyproxy.idp.app:app --host 127.0.0.1 --port 8300 \
+		--ssl-keyfile .dev/certs/idp.localhost-key.pem \
+		--ssl-certfile .dev/certs/idp.localhost.pem
+
+run-admin:
+	$(UV) uvicorn hyproxy.admin.app:app --host 127.0.0.1 --port 8400
+
+run-authz:
+	$(UV) uvicorn hyproxy.authz.app:app --host 127.0.0.1 --port 8500
+
+## --- Quality --------------------------------------------------------------
+lint:
+	$(UV) ruff check src tests scripts
+	$(UV) ruff format --check src tests scripts
+
+fmt:
+	$(UV) ruff format src tests scripts
+	$(UV) ruff check --fix src tests scripts
+
+typecheck:
+	$(UV) mypy
+
+test:
+	$(UV) pytest -m "not integration and not e2e" -q
+
+test-integration:
+	$(UV) pytest -m integration -q
+
+test-e2e:
+	$(UV) pytest -m e2e -q
+
+check: lint typecheck test
+
+audit:
+	$(UV) bandit -q -r src -c pyproject.toml || $(UV) bandit -q -r src
+	$(UV) pip-audit
