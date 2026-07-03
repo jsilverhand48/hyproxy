@@ -1,12 +1,78 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { api } from "../lib/api";
-import type { User } from "../lib/types";
+import type { Role, User } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
 import { AsyncBody, Banner, Section } from "../components/ui";
 
+// Inline role management for one user. The list endpoint returns role *names*
+// (list[str]); attach/detach are keyed by role *id*, so we map name -> id from
+// the full roles list. Writes require a fresh step-up, which runMutation turns
+// into the IdP redirect.
+function RolePanel({ user, allRoles }: { user: User; allRoles: Role[] }) {
+  const { data, error, loading, reload } = useResource<string[]>(`/users/${user.id}/roles`);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [selected, setSelected] = useState("");
+
+  const assigned = data ?? [];
+  const assignable = allRoles.filter((r) => !assigned.includes(r.name));
+  const nameToId = new Map(allRoles.map((r) => [r.name, r.id]));
+
+  async function assign() {
+    if (!selected) return;
+    setMsg(await runMutation(() => api.put(`/users/${user.id}/roles/${selected}`)));
+    setSelected("");
+    reload();
+  }
+
+  async function unassign(roleName: string) {
+    const roleId = nameToId.get(roleName);
+    if (!roleId) return;
+    setMsg(await runMutation(() => api.del(`/users/${user.id}/roles/${roleId}`)));
+    reload();
+  }
+
+  return (
+    <div className="rolepanel">
+      <Banner kind="info" message={msg} />
+      <AsyncBody loading={loading} error={error} empty={false}>
+        <div className="chips">
+          {assigned.length === 0 && <span className="muted">No roles assigned.</span>}
+          {assigned.map((name) => (
+            <span key={name} className="chip">
+              {name}
+              <button
+                className="link danger chip-x"
+                title="Remove role"
+                onClick={() => void unassign(name)}
+              >
+                &times;
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="row">
+          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+            <option value="">Add role...</option>
+            {assignable.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <button onClick={() => void assign()} disabled={!selected}>
+            Assign
+          </button>
+        </div>
+      </AsyncBody>
+    </div>
+  );
+}
+
 export function Users() {
   const { data, error, loading, reload } = useResource<User[]>("/users");
+  const roles = useResource<Role[]>("/roles");
   const [msg, setMsg] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [form, setForm] = useState({
     email: "",
     display_name: "",
@@ -83,26 +149,45 @@ export function Users() {
           </thead>
           <tbody>
             {(data ?? []).map((u) => (
-              <tr key={u.id}>
-                <td>{u.email}</td>
-                <td>{u.display_name}</td>
-                <td>{u.auth_tier}</td>
-                <td>{u.status}</td>
-                <td className="actions">
-                  {u.status === "active" ? (
-                    <button className="link" onClick={() => setStatus(u, "disabled")}>
-                      Disable
+              <Fragment key={u.id}>
+                <tr>
+                  <td>{u.email}</td>
+                  <td>{u.display_name}</td>
+                  <td>{u.auth_tier}</td>
+                  <td>{u.status}</td>
+                  <td className="actions">
+                    <button
+                      className="link"
+                      onClick={() => setOpenId(openId === u.id ? null : u.id)}
+                    >
+                      {openId === u.id ? "Hide roles" : "Roles"}
                     </button>
-                  ) : (
-                    <button className="link" onClick={() => setStatus(u, "active")}>
-                      Enable
+                    {u.status === "active" ? (
+                      <button className="link" onClick={() => setStatus(u, "disabled")}>
+                        Disable
+                      </button>
+                    ) : (
+                      <button className="link" onClick={() => setStatus(u, "active")}>
+                        Enable
+                      </button>
+                    )}
+                    <button className="link danger" onClick={() => remove(u.id)}>
+                      Delete
                     </button>
-                  )}
-                  <button className="link danger" onClick={() => remove(u.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
+                  </td>
+                </tr>
+                {openId === u.id && (
+                  <tr>
+                    <td colSpan={5}>
+                      {roles.error ? (
+                        <p className="error">{roles.error}</p>
+                      ) : (
+                        <RolePanel user={u} allRoles={roles.data ?? []} />
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

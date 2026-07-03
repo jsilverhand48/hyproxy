@@ -178,3 +178,31 @@ th {
 .info {
   color: var(--accent);
 }
+
+.rolepanel {
+  padding: 0.25rem 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.15rem 0.15rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 0.85rem;
+}
+
+.chip-x {
+  padding: 0 0.35rem;
+  font-size: 1rem;
+  line-height: 1;
+}
