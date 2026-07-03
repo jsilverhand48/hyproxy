@@ -69,9 +69,11 @@ below are what remains.
 - [ ] Enforce backend TLS verification (no insecure skip-verify); pin/trust the
       internal CA before enabling any https backend.
 - [ ] Retire the dev-only `idp_verify_tls=false` authz->IdP backchannel setting.
-- [ ] Network segmentation: keep the admin API, `/authz/check`, `/guac/consume`,
-      the guac tunnel, and guacd internal; only the single public port and the
-      out-of-band WireGuard admin path face any network.
+- [ ] Network segmentation: keep the admin API, `/authz/check`, `/authz/routes`,
+      `/guac/consume`, the guac tunnel, and guacd internal; only the single public
+      port and the out-of-band WireGuard admin path face any network. `/authz/routes`
+      returns backend origins for the DB-driven route table and must never be
+      client-reachable (it is served by the internal authz service, like `/authz/check`).
 - [ ] Run the dedicated security review against `docs/security-notes.md` and
       close every dev-only accepted risk.
 
@@ -112,4 +114,8 @@ below are what remains.
 - [ ] Get rid of all comments across the code base except for install.sh
 - [ ] Remove staging/dev concept and enviroment building. Installing this app
       should be fully productionized
-- [ ] Create an automation to handle TPM 
+- [ ] Create an automation to handle TPM
+- [ ] Create unit tests for every part of the stack
+- [ ] Start scripts should be able to automatically detect if a rebuild needs
+      needs to be initiated if there were changes done to the source code that
+      require rebuild.

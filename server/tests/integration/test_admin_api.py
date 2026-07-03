@@ -220,6 +220,71 @@ async def test_crud_with_stepup_and_change_log(
     assert all(c.actor_id == admin_ctx["user"].id for c in changes)
 
 
+async def test_resource_public_host_set_normalized_and_unique(
+    admin_ctx: dict[str, Any], admin_client: httpx.AsyncClient
+) -> None:
+    dpop, token = admin_ctx["dpop"], admin_ctx["token"]
+
+    # Create with a public_host; it is normalized (lowercased, trailing dot stripped).
+    created = await admin_call(
+        admin_client,
+        dpop,
+        token,
+        "POST",
+        "/api/v1/resources",
+        {
+            "name": "plex",
+            "protocol": "https",
+            "public_host": "Plex.Test.",
+            "host": "10.0.0.5",
+            "ports": [32400],
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["public_host"] == "plex.test"
+    rid = created.json()["id"]
+
+    # A second resource cannot claim the same routing host.
+    dup = await admin_call(
+        admin_client,
+        dpop,
+        token,
+        "POST",
+        "/api/v1/resources",
+        {
+            "name": "plex2",
+            "protocol": "https",
+            "public_host": "plex.test",
+            "host": "10.0.0.6",
+            "ports": [1],
+        },
+    )
+    assert dup.status_code == 409, dup.text
+
+    # Malformed hosts are rejected by the schema (422), matching the edge's rules.
+    bad = await admin_call(
+        admin_client,
+        dpop,
+        token,
+        "POST",
+        "/api/v1/resources",
+        {
+            "name": "bad",
+            "protocol": "https",
+            "public_host": "no_underscores",
+            "host": "10.0.0.7",
+            "ports": [1],
+        },
+    )
+    assert bad.status_code == 422, bad.text
+
+    # Patching the route to null clears it; re-adding it elsewhere then works.
+    cleared = await admin_call(
+        admin_client, dpop, token, "PATCH", f"/api/v1/resources/{rid}", {"public_host": None}
+    )
+    assert cleared.status_code == 200 and cleared.json()["public_host"] is None
+
+
 async def test_reads_ok_but_mutations_need_stepup(
     idp_client: httpx.AsyncClient,
     admin_client: httpx.AsyncClient,

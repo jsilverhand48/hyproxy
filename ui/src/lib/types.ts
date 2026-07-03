@@ -21,6 +21,7 @@ export interface Resource {
   id: string;
   name: string;
   protocol: string;
+  public_host: string | null;
   host: string;
   ports: number[];
   path_prefix: string | null;

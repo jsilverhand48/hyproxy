@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"hyproxy/dataplane/internal/config"
 )
 
 type Client struct {
@@ -113,4 +115,32 @@ func (c *Client) ConsumeGuac(ctx context.Context, req ConsumeRequest) (bool, err
 		return false, nil
 	}
 	return false, fmt.Errorf("guac consume returned %d", resp.StatusCode)
+}
+
+// routesResponse mirrors the control plane's GET /authz/routes envelope.
+type routesResponse struct {
+	Routes map[string]config.Route `json:"routes"`
+}
+
+// Routes fetches the DB-driven app route table from the control plane. The data
+// plane merges these with its static infra routes and hot-swaps. On any error
+// the caller keeps its last-good table (fail-closed: never widen on a bad pull).
+func (c *Client) Routes(ctx context.Context) (map[string]config.Route, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/authz/routes", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("authz routes returned %d", resp.StatusCode)
+	}
+	var out routesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Routes, nil
 }

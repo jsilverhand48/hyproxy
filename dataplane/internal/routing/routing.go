@@ -72,7 +72,14 @@ type Table struct {
 }
 
 func NewTable(cfg *config.Config) *Table {
-	return &Table{authHost: cfg.AuthHost, routes: cfg.Routes}
+	return NewTableFrom(cfg.AuthHost, cfg.Routes)
+}
+
+// NewTableFrom builds a table from an explicit route map. Used to construct
+// fresh tables at runtime when DB-driven routes change (the auth host is fixed
+// at startup and never changes).
+func NewTableFrom(authHost string, routes map[string]config.Route) *Table {
+	return &Table{authHost: authHost, routes: routes}
 }
 
 // Lookup resolves a raw Host header. Unknown or malformed hosts return

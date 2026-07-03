@@ -7,6 +7,7 @@ from sqlalchemy import select
 from hyproxy.admin.changes import record_change
 from hyproxy.admin.deps import AdminDep, DbDep, StepUpDep
 from hyproxy.admin.schemas import ResourceCreate, ResourceOut, ResourcePatch
+from hyproxy.config import get_settings
 from hyproxy.db.models import Resource
 
 router = APIRouter(prefix="/api/v1/resources", tags=["resources"])
@@ -16,11 +17,29 @@ def _snapshot(r: Resource) -> dict[str, Any]:
     return {
         "name": r.name,
         "protocol": r.protocol,
+        "public_host": r.public_host,
         "host": r.host,
         "ports": r.ports,
         "path_prefix": r.path_prefix,
         "enabled": r.enabled,
     }
+
+
+async def _validate_public_host(
+    db: DbDep, public_host: str | None, *, exclude_id: uuid.UUID | None = None
+) -> None:
+    """Reject a public_host that collides with the gateway auth host or another
+    resource. Format is already normalized/validated by the schema; the data
+    plane resolves routes by this host, so a duplicate would be ambiguous."""
+    if public_host is None:
+        return
+    if public_host == get_settings().auth_host.strip().lower().rstrip("."):
+        raise HTTPException(status_code=409, detail="public_host is reserved (auth host)")
+    query = select(Resource.id).where(Resource.public_host == public_host)
+    if exclude_id is not None:
+        query = query.where(Resource.id != exclude_id)
+    if await db.scalar(query) is not None:
+        raise HTTPException(status_code=409, detail="public_host already in use")
 
 
 @router.get("")
@@ -33,6 +52,7 @@ async def list_resources(db: DbDep, _authed: AdminDep) -> list[ResourceOut]:
 async def create_resource(body: ResourceCreate, db: DbDep, authed: StepUpDep) -> ResourceOut:
     if await db.scalar(select(Resource).where(Resource.name == body.name)) is not None:
         raise HTTPException(status_code=409, detail="resource name exists")
+    await _validate_public_host(db, body.public_host)
     row = Resource(**body.model_dump())
     db.add(row)
     await db.flush()
@@ -54,8 +74,11 @@ async def patch_resource(
     row = await db.get(Resource, resource_id)
     if row is None:
         raise HTTPException(status_code=404, detail="resource not found")
+    patch = body.model_dump(exclude_unset=True)
+    if "public_host" in patch:
+        await _validate_public_host(db, patch["public_host"], exclude_id=resource_id)
     before = _snapshot(row)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    for field, value in patch.items():
         setattr(row, field, value)
     await db.flush()
     await record_change(

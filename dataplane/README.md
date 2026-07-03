@@ -33,8 +33,14 @@ Or from the repo root: `make dp-build`, `make dp-test`, `make dp-fuzz`,
 
 ## Config
 
-See `config.example.json`. `routes` maps each public host to one allowlisted
-backend origin (absolute http(s) URL, no path). `auth_host` is served by the
-control plane's authz service and is the only host whose `/gateway/*` paths are
-proxied there; nothing else on the auth host is reachable. The proxy never
-dials anything not in this file.
+See `config.example.json`. `routes` holds the STATIC infra routes only (idp/admin,
+each an allowlisted backend origin: absolute http(s) URL, no path). Application
+routes are DB-driven: the proxy polls the control plane's internal `/authz/routes`
+(derived from enabled resources, keyed by `public_host`) every `routes_refresh_secs`
+and hot-swaps its route table, so an admin adding a resource makes the route live
+with no restart. Static routes win on host conflict; a failed poll keeps the
+last-good table (fail-closed). `guac_backend` is the tunnel origin the proxy routes
+DB vnc/rdp/ssh resources to. `auth_host` is served by the control plane's authz
+service and is the only host whose `/gateway/*` paths are proxied there; nothing
+else on the auth host is reachable. Backends come only from server-side config or
+DB rows (the SSRF invariant): the proxy never dials anything the client can name.

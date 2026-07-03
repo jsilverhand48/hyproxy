@@ -6,17 +6,16 @@
   "auth_host": "auth.localhost",
   "auth_backend": "http://127.0.0.1:8500",
   "gateway_cookie_name": "__Secure-gw",
+  "guac_backend": "http://127.0.0.1:8600",
+  "routes_refresh_secs": 10,
   "routes": {
-    "photos.localhost": {
-      "backend": "http://127.0.0.1:9101"
+    "idp.localhost": {
+      "backend": "http://127.0.0.1:8300",
+      "auth": false
     },
-    "plex.localhost": {
-      "backend": "http://127.0.0.1:9102",
-      "backend_port": 32400
-    },
-    "desktop.localhost": {
-      "backend": "http://127.0.0.1:8600",
-      "guac_tunnel": true
+    "admin.localhost": {
+      "backend": "http://127.0.0.1:8400",
+      "auth": false
     }
   }
 }

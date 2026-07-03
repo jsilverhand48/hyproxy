@@ -51,29 +51,61 @@ class RoleOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _normalize_public_host(v: object) -> object:
+    """Normalize and validate a resource's public routing host.
+
+    Mirrors the data plane's `routing.NormalizeHost` (lowercase, <=253 chars,
+    DNS labels of a-z/0-9/-, no leading/trailing hyphen): the data plane rejects
+    anything else at the edge, so refuse it here rather than store a host that
+    can never route. Returns None unchanged (a resource with no routing host is
+    valid; it simply has no route)."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValueError("public_host must be a string")
+    host = v.strip().lower().rstrip(".")
+    if not host or len(host) > 253:
+        raise ValueError("public_host must be 1-253 characters")
+    for label in host.split("."):
+        if not label or len(label) > 63:
+            raise ValueError("public_host has an empty or over-long label")
+        if label[0] == "-" or label[-1] == "-":
+            raise ValueError("public_host label may not start or end with '-'")
+        if not all(c == "-" or c.isdigit() or ("a" <= c <= "z") for c in label):
+            raise ValueError("public_host may only contain a-z, 0-9, and '-'")
+    return host
+
+
 class ResourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     protocol: Literal["http", "https", "tcp", "vnc", "rdp", "ssh"]
+    public_host: str | None = None
     host: str = Field(min_length=1, max_length=255)
     ports: list[int] = Field(min_length=1)
     path_prefix: str | None = None
     description: str | None = None
     enabled: bool = True
 
+    _norm_public_host = field_validator("public_host", mode="before")(_normalize_public_host)
+
 
 class ResourcePatch(BaseModel):
     name: str | None = None
+    public_host: str | None = None
     host: str | None = None
     ports: list[int] | None = None
     path_prefix: str | None = None
     description: str | None = None
     enabled: bool | None = None
 
+    _norm_public_host = field_validator("public_host", mode="before")(_normalize_public_host)
+
 
 class ResourceOut(BaseModel):
     id: uuid.UUID
     name: str
     protocol: str
+    public_host: str | None
     host: str
     ports: list[int]
     path_prefix: str | None

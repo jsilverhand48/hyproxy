@@ -66,6 +66,16 @@ browser --TLS--> data plane (:443) --Host routing--> forward-auth (/authz/check)
 gateway RP (OIDC code+PKCE, DPoP) --> IdP login       allowlisted backend
 ```
 
+The Host-routing table is **DB-driven**: create a resource with a `public_host`
+in the admin UI and the data plane hot-loads the route (no config edit, no
+restart). The data plane polls the control plane's internal `GET /authz/routes`
+(derived from enabled resources) every `routes_refresh_secs` and atomically swaps
+its route table. `dataplane/config.json` holds only the infra routes (idp/admin,
+`auth:false`), the gateway auth host, and `guac_backend` (the tunnel origin for
+DB vnc/rdp/ssh resources). Backends still come only from server-side resource
+rows, never client input (the SSRF invariant), and a failed poll keeps the
+last-good table (fail-closed), so the management plane stays reachable.
+
 ## Scripts
 
 Three top-level orchestration scripts wrap the `make` targets end to end:

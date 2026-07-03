@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from hyproxy.authz.check import router as check_router
 from hyproxy.authz.gateway import router as gateway_router
 from hyproxy.authz.guac import router as guac_router
+from hyproxy.authz.routes import router as routes_router
 from hyproxy.config import get_settings
 
 
@@ -36,6 +37,7 @@ def create_app(idp_http: httpx.AsyncClient | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(check_router)
+    app.include_router(routes_router)
     app.include_router(gateway_router)
     app.include_router(guac_router)
 

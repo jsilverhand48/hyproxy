@@ -5,12 +5,14 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	"hyproxy/dataplane/internal/authz"
 	"hyproxy/dataplane/internal/config"
@@ -27,13 +29,27 @@ type AuthzChecker interface {
 	ConsumeGuac(ctx context.Context, req authz.ConsumeRequest) (bool, error)
 }
 
+// routeSet is one immutable routing snapshot: a lookup table and the reverse
+// proxies for its app routes, always built together so a Host lookup and its
+// backend proxy come from the same generation. Swapped atomically when the
+// DB-driven route table changes (SwapRoutes); ServeHTTP loads it once per
+// request.
+type routeSet struct {
+	table   *routing.Table
+	proxies map[string]*httputil.ReverseProxy
+}
+
 type Server struct {
-	table      *routing.Table
 	authz      AuthzChecker
 	cookieName string
 	authProxy  *httputil.ReverseProxy
-	appProxies map[string]*httputil.ReverseProxy
+	routes     atomic.Pointer[routeSet]
 	log        *slog.Logger
+
+	// Fixed at startup, used to rebuild routeSets on swap.
+	authHost     string
+	staticRoutes map[string]config.Route
+	guacBackend  string
 }
 
 func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Server, error) {
@@ -42,21 +58,69 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		return nil, err
 	}
 	s := &Server{
-		table:      routing.NewTable(cfg),
-		authz:      checker,
-		cookieName: cfg.GatewayCookieName,
-		authProxy:  newReverseProxy(authBackend, log),
-		appProxies: make(map[string]*httputil.ReverseProxy, len(cfg.Routes)),
-		log:        log,
+		authz:        checker,
+		cookieName:   cfg.GatewayCookieName,
+		authProxy:    newReverseProxy(authBackend, log),
+		log:          log,
+		authHost:     cfg.AuthHost,
+		staticRoutes: cfg.Routes,
+		guacBackend:  cfg.GuacBackend,
 	}
-	for host, route := range cfg.Routes {
-		backend, err := url.Parse(route.Backend)
-		if err != nil {
-			return nil, err
-		}
-		s.appProxies[host] = newReverseProxy(backend, log)
+	// Initial snapshot: static infra routes only. The management plane
+	// (idp/admin) is reachable even if the control plane is down at boot; DB
+	// app routes are layered on by the first successful SwapRoutes.
+	rs, err := s.buildRouteSet(nil)
+	if err != nil {
+		return nil, err
 	}
+	s.routes.Store(rs)
 	return s, nil
+}
+
+// buildRouteSet merges the static infra routes with dbRoutes (static wins on
+// host conflict), resolves Guacamole tunnel backends to guacBackend, and
+// constructs a reverse proxy per app route. A route with an unparseable or
+// missing backend is skipped (logged), never fatal: one bad DB row must not
+// take down the whole table.
+func (s *Server) buildRouteSet(dbRoutes map[string]config.Route) (*routeSet, error) {
+	merged := make(map[string]config.Route, len(dbRoutes)+len(s.staticRoutes))
+	for host, r := range dbRoutes {
+		merged[host] = r
+	}
+	for host, r := range s.staticRoutes {
+		merged[host] = r // static infra routes take precedence
+	}
+	proxies := make(map[string]*httputil.ReverseProxy, len(merged))
+	for host, route := range merged {
+		backend := route.Backend
+		if backend == "" && route.GuacTunnel {
+			backend = s.guacBackend // DB guac routes carry no backend of their own
+		}
+		if backend == "" {
+			s.log.Warn("skipping route with no backend", "host", host, "guac", route.GuacTunnel)
+			delete(merged, host)
+			continue
+		}
+		u, err := url.Parse(backend)
+		if err != nil {
+			s.log.Warn("skipping route with bad backend", "host", host, "backend", backend, "err", err)
+			delete(merged, host)
+			continue
+		}
+		proxies[host] = newReverseProxy(u, s.log)
+	}
+	return &routeSet{table: routing.NewTableFrom(s.authHost, merged), proxies: proxies}, nil
+}
+
+// SwapRoutes rebuilds the routing snapshot from a fresh set of DB routes and
+// installs it atomically. In-flight requests keep using the previous snapshot.
+func (s *Server) SwapRoutes(dbRoutes map[string]config.Route) error {
+	rs, err := s.buildRouteSet(dbRoutes)
+	if err != nil {
+		return fmt.Errorf("build route set: %w", err)
+	}
+	s.routes.Store(rs)
+	return nil
 }
 
 func newReverseProxy(backend *url.URL, log *slog.Logger) *httputil.ReverseProxy {
@@ -113,7 +177,8 @@ func (s *Server) gatewayCookie(r *http.Request) string {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	route, host, kind := s.table.Lookup(r.Host)
+	rs := s.routes.Load()
+	route, host, kind := rs.table.Lookup(r.Host)
 	switch kind {
 	case routing.KindNone:
 		// Unknown/hostile Host: reveal nothing, route nowhere (spec section 11).
@@ -123,7 +188,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveAuthHost(w, r)
 		return
 	case routing.KindApp:
-		s.serveApp(w, r, host, route)
+		s.serveApp(w, r, rs, host, route)
 	}
 }
 
@@ -145,9 +210,11 @@ func isPublicGuacPath(path string) bool {
 	return path == "/guac/token"
 }
 
-func (s *Server) serveApp(w http.ResponseWriter, r *http.Request, host string, route config.Route) {
+func (s *Server) serveApp(
+	w http.ResponseWriter, r *http.Request, rs *routeSet, host string, route config.Route,
+) {
 	stripIdentityHeaders(r.Header)
-	upstream := s.appProxies[host]
+	upstream := rs.proxies[host]
 	cookie := s.gatewayCookie(r) // always strip the gateway cookie from upstream
 
 	if route.GuacTunnel {

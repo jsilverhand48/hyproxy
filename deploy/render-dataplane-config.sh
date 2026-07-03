@@ -11,6 +11,11 @@
 # sit behind the gateway forward-auth. Everything else (app backends) is
 # forward-authed.
 #
+# The "routes" object below is INFRA ONLY (idp/admin). Application routes are
+# DB-driven: create resources with a public_host in the admin UI and the data
+# plane polls the control plane (/authz/routes) and hot-loads them, no restart
+# and no config edit. Static routes here still work and win on host conflict.
+#
 # Required:
 #   STAGING_DOMAIN     base domain; hosts are idp./admin./auth.<domain>
 # Optional:
@@ -19,10 +24,8 @@
 #   DP_LISTEN          listen addr (default :443)
 #   DP_OUT             output path (default <repo>/dataplane/config.json)
 #   IDP_BACKEND/ADMIN_BACKEND/AUTHZ_BACKEND  loopback origins (sane defaults)
-#
-# App backends are deployment-specific; add them to the "routes" object after
-# rendering (each an object like {"backend":"http://127.0.0.1:9101"}), or extend
-# APP_ROUTES_JSON below.
+#   GUAC_BACKEND       tunnel origin for DB vnc/rdp/ssh routes (default guac:8600)
+#   ROUTES_REFRESH_SECS  DB-route poll interval (default 10)
 
 set -euo pipefail
 
@@ -36,10 +39,8 @@ DP_OUT="${DP_OUT:-$ROOT/dataplane/config.json}"
 IDP_BACKEND="${IDP_BACKEND:-http://127.0.0.1:8300}"
 ADMIN_BACKEND="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
 AUTHZ_BACKEND="${AUTHZ_BACKEND:-http://127.0.0.1:8500}"
-
-# Extra app routes as a JSON fragment (host -> route object), comma-LEADING so it
-# appends cleanly after the admin route. Default: none.
-APP_ROUTES_JSON="${APP_ROUTES_JSON:-}"
+GUAC_BACKEND="${GUAC_BACKEND:-http://127.0.0.1:8600}"
+ROUTES_REFRESH_SECS="${ROUTES_REFRESH_SECS:-10}"
 
 cat > "$DP_OUT" <<JSON
 {
@@ -50,9 +51,11 @@ cat > "$DP_OUT" <<JSON
   "auth_host": "auth.$STAGING_DOMAIN",
   "auth_backend": "$AUTHZ_BACKEND",
   "gateway_cookie_name": "__Secure-gw",
+  "guac_backend": "$GUAC_BACKEND",
+  "routes_refresh_secs": $ROUTES_REFRESH_SECS,
   "routes": {
     "idp.$STAGING_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
-    "admin.$STAGING_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }$APP_ROUTES_JSON
+    "admin.$STAGING_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
   }
 }
 JSON

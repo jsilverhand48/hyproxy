@@ -43,9 +43,21 @@ type Config struct {
 	AuthBackend string `json:"auth_backend"`
 	// GatewayCookieName is extracted for authz checks and stripped upstream.
 	GatewayCookieName string `json:"gateway_cookie_name"`
-	// Routes: public host -> backend.
+	// Routes are the STATIC infra routes (idp/admin), read once at startup. App
+	// routes are DB-driven and fetched from the control plane at runtime; static
+	// routes win on host conflict. May be empty.
 	Routes map[string]Route `json:"routes"`
+	// GuacBackend is the origin the data plane routes Guacamole tunnel resources
+	// (vnc/rdp/ssh) to (the Node guacamole-lite service). DB guac routes carry no
+	// backend of their own; this supplies it. Empty disables DB guac routes.
+	GuacBackend string `json:"guac_backend"`
+	// RoutesRefreshSecs is how often to poll the control plane for DB routes.
+	// Zero uses DefaultRoutesRefreshSecs.
+	RoutesRefreshSecs int `json:"routes_refresh_secs"`
 }
+
+// DefaultRoutesRefreshSecs is the DB-route poll interval when unset.
+const DefaultRoutesRefreshSecs = 10
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -76,6 +88,14 @@ func (c *Config) Validate() error {
 	}
 	if c.GatewayCookieName == "" {
 		c.GatewayCookieName = "__Secure-gw"
+	}
+	if c.RoutesRefreshSecs == 0 {
+		c.RoutesRefreshSecs = DefaultRoutesRefreshSecs
+	}
+	if c.GuacBackend != "" {
+		if _, err := parseBackend(c.GuacBackend); err != nil {
+			return fmt.Errorf("guac_backend: %w", err)
+		}
 	}
 	c.AuthHost = strings.ToLower(c.AuthHost)
 	if _, err := parseBackend(c.AuthBackend); err != nil {

@@ -9,7 +9,7 @@ const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh"];
 export function Resources() {
   const { data, error, loading, reload } = useResource<Resource[]>("/resources");
   const [msg, setMsg] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", protocol: "https", host: "", ports: "" });
+  const [form, setForm] = useState({ name: "", protocol: "https", public_host: "", host: "", ports: "" });
 
   async function create() {
     const ports = form.ports
@@ -21,17 +21,32 @@ export function Resources() {
         api.post<Resource>("/resources", {
           name: form.name,
           protocol: form.protocol,
+          public_host: form.public_host.trim() || null,
           host: form.host,
           ports,
         }),
       ),
     );
-    setForm({ name: "", protocol: "https", host: "", ports: "" });
+    setForm({ name: "", protocol: "https", public_host: "", host: "", ports: "" });
     reload();
   }
 
   async function toggle(r: Resource) {
     setMsg(await runMutation(() => api.patch<Resource>(`/resources/${r.id}`, { enabled: !r.enabled })));
+    reload();
+  }
+
+  async function editRoute(r: Resource) {
+    const next = window.prompt(
+      `Public host (routing key) for "${r.name}". Blank removes the route.`,
+      r.public_host ?? "",
+    );
+    if (next === null) return; // cancelled
+    setMsg(
+      await runMutation(() =>
+        api.patch<Resource>(`/resources/${r.id}`, { public_host: next.trim() || null }),
+      ),
+    );
     reload();
   }
 
@@ -64,7 +79,12 @@ export function Resources() {
           ))}
         </select>
         <input
-          placeholder="host"
+          placeholder="public host (route)"
+          value={form.public_host}
+          onChange={(e) => setForm({ ...form, public_host: e.target.value })}
+        />
+        <input
+          placeholder="backend host"
           value={form.host}
           onChange={(e) => setForm({ ...form, host: e.target.value })}
           required
@@ -84,7 +104,8 @@ export function Resources() {
             <tr>
               <th>Name</th>
               <th>Protocol</th>
-              <th>Host</th>
+              <th>Public host</th>
+              <th>Backend host</th>
               <th>Ports</th>
               <th>Enabled</th>
               <th></th>
@@ -95,10 +116,14 @@ export function Resources() {
               <tr key={r.id}>
                 <td>{r.name}</td>
                 <td>{r.protocol}</td>
+                <td>{r.public_host ?? <span className="muted">(no route)</span>}</td>
                 <td>{r.host}</td>
                 <td>{r.ports.join(", ")}</td>
                 <td>{r.enabled ? "yes" : "no"}</td>
                 <td className="actions">
+                  <button className="link" onClick={() => editRoute(r)}>
+                    Route
+                  </button>
                   <button className="link" onClick={() => toggle(r)}>
                     {r.enabled ? "Disable" : "Enable"}
                   </button>
