@@ -80,8 +80,8 @@ fi
 # server/.env drives every Python service (pydantic-settings reads it from the
 # server working directory). Seed it from the example on first run.
 if [ ! -f "$ENV_FILE" ]; then
-  log "creating server/.env from .env.example"
-  cp "$ROOT/.env.example" "$ENV_FILE"
+  log "creating server/.env from .env.dev.example"
+  cp "$ROOT/.env.dev.example" "$ENV_FILE"
   warn "review server/.env; defaults target the local dev database"
 fi
 

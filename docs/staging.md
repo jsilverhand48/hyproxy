@@ -36,7 +36,7 @@ client's `/etc/hosts`. DNS-01 makes the cert valid regardless of the A record.
 
 1. **Config files.** From the repo root:
    ```sh
-   cp deploy/staging.env.example .env      # then edit: STAGING_DOMAIN, HYPROXY_ISSUER,
+   cp .env.staging.example .env            # then edit: STAGING_DOMAIN, HYPROXY_ISSUER,
                                            # HYPROXY_ADMIN_UI_ORIGIN, POSTGRES_PASSWORD
    ```
    Create the DNS-provider secret file (root-owned, 0600). For GoDaddy:

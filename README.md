@@ -126,8 +126,8 @@ make create-admin-ui-client args='--redirect-uri http://127.0.0.1:8400/callback'
 HYPROXY_ADMIN_UI_ORIGIN=http://127.0.0.1:8400 make run-admin  # serve API + UI
 ```
 
-Copy `.env.example` to `server/.env` and adjust `HYPROXY_DB_URL` (the
-fallback DB URL is printed by `make db-up`). The cross-plane E2E
+Copy `.env.dev.example` to `server/.env` and adjust `HYPROXY_DB_URL` (the
+fallback DB URL is printed by `make db-up`; `start-dev.sh` seeds this for you). The cross-plane E2E
 (`make test-e2e`) compiles the Go binary and runs it in front of live IdP and
 authz services, so it needs the Go toolchain and dev certs present.
 

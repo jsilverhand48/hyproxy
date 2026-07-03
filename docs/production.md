@@ -29,8 +29,19 @@ Sequence for a new deployment: copy `.env.example` to the repo-root `.env` and
 fill it in, author `dataplane/config.json`, obtain certificates (section 2), run
 `./bootstrap-prod.sh`, complete the section 5 checklist and security review,
 then `./start-prod.sh`. The containerized services carry compose `restart`
-policies; the baremetal data plane still needs a systemd unit (see
-`docs/deployment.md` and `docs/TODO.md`).
+policies; supervise the baremetal data plane with the shipped
+`deploy/systemd/hyproxy-dataplane.service` (enable it instead of leaving
+`start-prod.sh` in the foreground). Two host-integration notes learned on staging:
+
+- SELinux (enforcing, e.g. RHEL/Rocky): systemd (`init_t`) cannot exec a binary
+  that carries a home-dir/tmp type. Deploy the data-plane binary + `config.json`
+  under a system path (the unit assumes `/opt/hyproxy`), not under `/root` or the
+  build tree, and label the binary `bin_t` (`semanage fcontext -a -t bin_t ...;
+  restorecon`) so the label survives a relabel. Run it de-privileged as `hyproxy`
+  with `AmbientCapabilities=CAP_NET_BIND_SERVICE` to bind the public port.
+- Host firewall: the single public port is not reachable until it is opened
+  (`firewall-cmd --permanent --add-service=https`); the control-plane ports stay
+  loopback-published and must NOT be opened.
 
 ## 1. TPM-backed master key (secrets broker)
 
@@ -75,6 +86,24 @@ client:
 - Schedule renewal with a safety margin (e.g. daily check, renew < 30 days to
   expiry). Renewal failures must alert (section 4). Use the ACME staging
   directory first, then production.
+
+The repo ships a ready lego DNS-01 flow (validated on staging, `docs/staging.md`):
+- `deploy/acme/obtain-cert.sh` issues/renews the wildcard and installs it atomically
+  into the data-plane paths (the key is written `0640` to `DP_TLS_GROUP` so a
+  de-privileged data plane can read it); the hot-reload seam serves it with no
+  restart. `deploy/acme/hyproxy-acme.{service,timer}` run the daily renewal check.
+- Non-secret knobs and provider API credentials go in a root-owned `/etc/hyproxy/acme.env`
+  (`0600`), never in the repo.
+- lego v5 folds issue and renew into a single `run` subcommand, and its flags are
+  subcommand-scoped (they follow `run`); the script accounts for both.
+- Dry-run against the Let's Encrypt STAGING CA first (`ACME_STAGING=1`). The staging
+  and production certs share lego's `certificates/` dir, so remove the staging
+  artifact (`_.<domain>.*`) before issuing the real cert, or the "cert exists ->
+  renew" path will keep serving the untrusted one.
+- If the host cannot reach a public resolver to self-verify TXT propagation (e.g.
+  a NAT-only VM whose only resolver caches NXDOMAIN), set `LEGO_DNS_PROPAGATION_WAIT`
+  to skip the self-check and wait a fixed window; Let's Encrypt validates from its
+  own resolvers regardless.
 
 ## 3. Dynamic DNS (DDNS)
 

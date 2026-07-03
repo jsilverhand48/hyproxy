@@ -12,3 +12,8 @@ __pycache__/
 *.pyo
 *.pyd
 settings.local.json
+
+# Data-plane build artifacts (compiled by `make dp-build` / e2e during setup)
+dataplane/bin/
+# Rendered, deployment-specific data-plane config (copy config.example.json)
+dataplane/config.json

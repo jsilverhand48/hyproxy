@@ -50,12 +50,14 @@ mode="${1:-auto}"
 crt="$LEGO_PATH/certificates/_.$STAGING_DOMAIN.crt"
 key="$LEGO_PATH/certificates/_.$STAGING_DOMAIN.key"
 
+# lego v5 folds get + renew into a single `run` command, and all these flags are
+# subcommand-scoped, so they must follow `run` (v4 accepted them before it).
 if { [ "$mode" = "auto" ] && [ ! -f "$crt" ]; }; then
   echo "==> issuing wildcard cert for *.$STAGING_DOMAIN via DNS-01 ($LEGO_DNS_PROVIDER)"
-  lego "${common[@]}" run
+  lego run "${common[@]}"
 else
   echo "==> renewing (if within 30 days) *.$STAGING_DOMAIN"
-  lego "${common[@]}" renew --days 30 --renew-hook "" || true
+  lego run "${common[@]}" --renew-days 30 || true
 fi
 
 [ -f "$crt" ] || { echo "expected issued cert at $crt not found" >&2; exit 1; }
