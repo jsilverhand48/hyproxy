@@ -13,6 +13,10 @@
 #   SKIP_UI=1        skip the admin UI install/build step
 #   WITH_TUNNEL=1    also start the guacamole-lite tunnel (needs a running guacd)
 #   FORCE_UI=1       rebuild the UI even if ui/dist already exists
+#   BIND_HOST=addr   interface the Python services bind (default 127.0.0.1).
+#                    Set BIND_HOST=0.0.0.0 to reach them from the LAN for
+#                    manual component testing. DEV ONLY: no auth fronts these
+#                    ports, so only do this on a trusted network.
 
 set -euo pipefail
 
@@ -31,6 +35,7 @@ DP_BIN="$DATAPLANE/bin/dataplane"
 SKIP_UI="${SKIP_UI:-0}"
 WITH_TUNNEL="${WITH_TUNNEL:-0}"
 FORCE_UI="${FORCE_UI:-0}"
+BIND_HOST="${BIND_HOST:-127.0.0.1}"
 
 # Dev origin the SPA is served from (the admin app itself). Enables the IdP CORS
 # allowance and the step-up return target.
@@ -133,15 +138,15 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 start_svc idp bash -c "cd '$SERVER' && exec uv run uvicorn hyproxy.idp.app:app \
-  --host 127.0.0.1 --port 8300 \
+  --host $BIND_HOST --port 8300 \
   --ssl-keyfile .dev/certs/idp.localhost-key.pem \
   --ssl-certfile .dev/certs/idp.localhost.pem"
 
 start_svc admin bash -c "cd '$SERVER' && exec uv run uvicorn hyproxy.admin.app:app \
-  --host 127.0.0.1 --port 8400"
+  --host $BIND_HOST --port 8400"
 
 start_svc authz bash -c "cd '$SERVER' && exec uv run uvicorn hyproxy.authz.app:app \
-  --host 127.0.0.1 --port 8500"
+  --host $BIND_HOST --port 8500"
 
 start_svc dataplane bash -c "cd '$DATAPLANE' && exec ./bin/dataplane -config config.example.json"
 
@@ -157,9 +162,9 @@ cat <<EOF
 
 $(printf '\033[1;32mhyproxy is up.\033[0m')
 
-  IdP        https://idp.localhost:8300
-  Admin API  http://127.0.0.1:8400   (loopback only; UI served here when built)
-  Authz      http://127.0.0.1:8500   (internal only)
+  IdP        https://idp.localhost:8300     (bound to $BIND_HOST)
+  Admin API  http://$BIND_HOST:8400   (UI served here when built)
+  Authz      http://$BIND_HOST:8500   (internal only)
   Data plane https://localhost:8443  (Host-routed to backends in dataplane/config.example.json)
 
 Note: the routes use *.localhost hostnames (idp.localhost, auth.localhost,
