@@ -109,3 +109,7 @@ below are what remains.
       trail) and a documented disaster-recovery path.
 - [ ] Clock-skew monitoring (NTP): TOTP and token expiry depend on it; add an
       alert.
+- [ ] Get rid of all comments across the code base except for install.sh
+- [ ] Remove staging/dev concept and enviroment building. Installing this app
+      should be fully productionized
+- [ ] Create an automation to handle TPM 

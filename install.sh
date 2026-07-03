@@ -27,7 +27,7 @@
 
 set -eu
 
-REPO_URL="${HYPROXY_REPO_URL:-https://github.com/YOUR_ORG/YOUR_REPO.git}"
+REPO_URL="${HYPROXY_REPO_URL:-https://github.com/jsilverhand48/hyproxy.git}"
 REPO_BRANCH="${HYPROXY_REPO_BRANCH:-main}"
 INSTALL_DIR="${HYPROXY_INSTALL_DIR:-/opt/hyproxy}"
 ACME_ENV="/etc/hyproxy/acme.env"
