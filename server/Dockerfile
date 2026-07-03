@@ -10,10 +10,17 @@
 # --- UI build stage ---------------------------------------------------------
 FROM node:22-alpine AS ui
 WORKDIR /ui
+# The SPA's IdP issuer and client id are compiled into the bundle by Vite. Pass
+# them as build args (compose forwards them from .env) so a staging/prod image
+# targets the real issuer; the defaults keep local/dev builds unchanged.
+ARG VITE_IDP_ISSUER=https://idp.localhost:8300
+ARG VITE_ADMIN_UI_CLIENT_ID=admin-ui
+ENV VITE_IDP_ISSUER=$VITE_IDP_ISSUER \
+    VITE_ADMIN_UI_CLIENT_ID=$VITE_ADMIN_UI_CLIENT_ID
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 COPY ui/ ./
-RUN npm run build   # emits /ui/dist
+RUN npm run build   # emits /ui/dist (bakes VITE_IDP_ISSUER)
 
 # --- Python runtime ---------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS runtime

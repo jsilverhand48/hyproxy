@@ -22,6 +22,11 @@ name: hyproxy
 x-server-build: &server-build
   context: .
   dockerfile: server/Dockerfile
+  # Bake the SPA's IdP issuer into the image at build time (Vite compiles it in).
+  # Reuse HYPROXY_ISSUER so the served SPA and the server agree on one value.
+  args:
+    VITE_IDP_ISSUER: ${HYPROXY_ISSUER:-https://idp.localhost:8300}
+    VITE_ADMIN_UI_CLIENT_ID: ${VITE_ADMIN_UI_CLIENT_ID:-admin-ui}
 
 # Shared control-plane environment. Env vars take precedence over any baked
 # config, so these pin the containerized topology (service-name DB host, etc.).
@@ -30,6 +35,11 @@ x-server-env: &server-env
   HYPROXY_ISSUER: ${HYPROXY_ISSUER:-https://idp.localhost:8300}
   HYPROXY_SECRETS_BACKEND: ${HYPROXY_SECRETS_BACKEND:-file}
   HYPROXY_MASTER_KEY_FILE: /run/secrets/master_key
+  # The IdP needs this too, not just the admin app: it scopes the IdP's CORS
+  # allowance (idp/app.py) and validates the step-up return_to
+  # (idp/web/webauthn_routes.py). When admin and idp are different hosts the
+  # SPA's token exchange is cross-origin, so the IdP must know the UI origin.
+  HYPROXY_ADMIN_UI_ORIGIN: ${HYPROXY_ADMIN_UI_ORIGIN:-}
 
 x-healthcheck-defaults: &healthcheck-defaults
   interval: 5s
@@ -123,9 +133,7 @@ services:
       - "--port=8400"
       - "--proxy-headers"
       - "--forwarded-allow-ips=*"
-    environment:
-      <<: *server-env
-      HYPROXY_ADMIN_UI_ORIGIN: ${HYPROXY_ADMIN_UI_ORIGIN:-}
+    environment: *server-env
     secrets: [master_key]
     ports:
       - "127.0.0.1:8400:8400"
