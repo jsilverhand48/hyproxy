@@ -23,6 +23,24 @@ def client_ip(request: Request) -> str:
     return request.client.host
 
 
+def _expected_htu(request: Request) -> str:
+    """DPoP htu for admin API calls, pinned to the public admin origin.
+
+    The SPA signs the proof over its own origin (window.location.origin +
+    /api/v1/...). Behind the data-plane proxy the Host header is rewritten to
+    the internal backend vhost, and uvicorn's --proxy-headers honors
+    X-Forwarded-Proto but not X-Forwarded-Host, so str(request.url) carries the
+    wrong host and every proof would fail htu comparison. Rebuild htu from the
+    configured admin_ui_origin (mirrors the IdP's _token_htu); the path is the
+    one part of the request URL that is authoritative. Fall back to the raw URL
+    when no origin is configured (dev / no proxy), where they already agree.
+    """
+    origin = get_settings().admin_ui_origin
+    if not origin:
+        return str(request.url)
+    return f"{origin.rstrip('/')}{request.url.path}"
+
+
 async def require_admin(request: Request, db: DbDep) -> sessions.AuthedRequest:
     try:
         authed = await sessions.check_request(
@@ -30,7 +48,7 @@ async def require_admin(request: Request, db: DbDep) -> sessions.AuthedRequest:
             authorization=request.headers.get("authorization"),
             dpop_proof=request.headers.get("dpop"),
             htm=request.method,
-            htu=str(request.url),
+            htu=_expected_htu(request),
             source_ip=client_ip(request),
             now=datetime.now(UTC),
         )
