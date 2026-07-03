@@ -1,8 +1,10 @@
 # LAN-only staging environment
 
-A staging deployment on a single VM (Rocky Linux 9 with Docker, Node, uv, and a
-Go toolchain), reachable only from the LAN, with browser-trusted **Let's Encrypt**
-TLS. It reuses the production topology (`docs/deployment.md`): the containerized
+A staging deployment on a single VM (**Rocky Linux only** for now), reachable
+only from the LAN, with browser-trusted **Let's Encrypt** TLS. `bootstrap-prod.sh`
+installs any missing host toolchain (Docker, the Go toolchain, make, uv, lego)
+and opens the public port in `firewalld`, so a bare Rocky VM is enough to start.
+It reuses the production topology (`docs/deployment.md`): the containerized
 control plane behind the baremetal Go data plane as the single TLS ingress. The
 one deliberate difference from prod is that the **admin UI is reachable from the
 LAN** (still never from the internet), fronted through the data plane on a

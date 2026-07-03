@@ -10,14 +10,19 @@ tested in-repo are noted; the rest are deployment integrations.
 
 Production runs as a hybrid: the control plane is containerized and the Go data
 plane runs on baremetal. `docs/deployment.md` is the full topology reference.
-Two scripts wrap this runbook:
+Supported platform: Rocky Linux only for now (the scripts use `dnf` and
+`firewalld`). Two scripts wrap this runbook:
 
-- `./bootstrap-prod.sh` runs once per deployment. It validates the environment
-  fail-closed, builds the container images (the UI is compiled inside the server
-  image), applies migrations, ensures signing keys, creates the first admin, and
-  registers the `admin-ui` OIDC client (all inside containers), builds the
-  baremetal data-plane binary, and runs the audit/vet gates. It stops before the
-  public port is opened and prints the section 5 checklist.
+- `./bootstrap-prod.sh` runs once per deployment. On Rocky Linux it first
+  installs any missing host dependencies (Docker + the compose plugin, the Go
+  toolchain, make, uv, and lego) and opens the public data-plane port in
+  `firewalld`. It then validates the environment fail-closed, builds the
+  container images (the UI is compiled inside the server image), applies
+  migrations, ensures signing keys, creates the first admin, and registers the
+  `admin-ui` OIDC client (all inside containers), builds the baremetal
+  data-plane binary, and runs the audit/vet gates. It stops before starting the
+  public ingress and prints the section 5 checklist. It is idempotent: it only
+  installs or opens what is missing, so re-running is safe.
 - `./start-prod.sh` starts the stack on every boot. It hard-requires Docker,
   refuses to start if any dependency, artifact (`dataplane/bin/dataplane`,
   `dataplane/config.json`), or configuration value (issuer, secrets backend, TLS
@@ -39,9 +44,11 @@ policies; supervise the baremetal data plane with the shipped
   build tree, and label the binary `bin_t` (`semanage fcontext -a -t bin_t ...;
   restorecon`) so the label survives a relabel. Run it de-privileged as `hyproxy`
   with `AmbientCapabilities=CAP_NET_BIND_SERVICE` to bind the public port.
-- Host firewall: the single public port is not reachable until it is opened
-  (`firewall-cmd --permanent --add-service=https`); the control-plane ports stay
-  loopback-published and must NOT be opened.
+- Host firewall: the single public port is not reachable until it is opened.
+  `bootstrap-prod.sh` opens it in `firewalld` (derived from `DP_LISTEN` /
+  `dataplane/config.json`, default 443); to do it by hand,
+  `firewall-cmd --permanent --add-port=443/tcp && firewall-cmd --reload`. The
+  control-plane ports stay loopback-published and must NOT be opened.
 
 ## 1. TPM-backed master key (secrets broker)
 

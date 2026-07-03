@@ -74,12 +74,14 @@ Three top-level orchestration scripts wrap the `make` targets end to end:
   dev keys/certs, admin UI, Go data plane, then IdP + admin + authz + data plane
   together. Ctrl-C stops all of them. Toggles: `SKIP_UI=1`, `FORCE_UI=1`,
   `WITH_TUNNEL=1`.
-- `./bootstrap-prod.sh` performs the one-time first-run production setup: it
-  builds the container images (the UI is compiled inside the server image), runs
-  migrations, signing keys, the first admin, and OIDC clients inside containers,
-  builds the baremetal data-plane binary, runs the gates, and then STOPS short
-  of opening the public port. It is fail-closed and never self-signs certs. Run
-  it once per deployment.
+- `./bootstrap-prod.sh` performs the one-time first-run production setup
+  (**Rocky Linux only** for now): it installs any missing host dependencies
+  (Docker + compose plugin, Go, make, uv, lego) and opens the public port in
+  `firewalld`, builds the container images (the UI is compiled inside the server
+  image), runs migrations, signing keys, the first admin, and OIDC clients
+  inside containers, builds the baremetal data-plane binary, runs the gates, and
+  then STOPS short of starting the public ingress. It is idempotent and
+  fail-closed, and never self-signs certs. Run it once per deployment.
 - `./start-prod.sh` starts the stack in production following the hybrid model:
   it hard-requires Docker (aborts if absent), fail-closes on any missing
   dependency, artifact, or config value, brings up the containerized Postgres +
