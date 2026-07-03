@@ -87,6 +87,12 @@ Three top-level orchestration scripts wrap the `make` targets end to end:
   dependency, artifact, or config value, brings up the containerized Postgres +
   control plane (idp/admin/authz) + guac bridge, then starts the baremetal Go
   data plane (the single public ingress) in the foreground. It builds nothing.
+- `./start-staging.sh` starts the full LAN-only staging flow on the staging VM
+  (`docs/staging.md`): it loads the repo-root `.env`, renders the data-plane
+  config, verifies (or builds) the artifacts, brings up the containerized
+  control plane, enables the ACME renewal timer, then runs the baremetal data
+  plane on the LAN ingress in the foreground. Toggles: `REBUILD=1` (rebuild
+  images from pulled code), `RENDER_CONFIG=1`, `SKIP_TIMER=1`.
 
 Production runs as a **hybrid**: the Go data plane is the only baremetal piece
 (the public TLS edge); everything else is containerized in `docker-compose.yml`
