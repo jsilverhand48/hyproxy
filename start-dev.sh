@@ -17,6 +17,12 @@
 #                    Set BIND_HOST=0.0.0.0 to reach them from the LAN for
 #                    manual component testing. DEV ONLY: no auth fronts these
 #                    ports, so only do this on a trusted network.
+#   DEV_HOST=addr    reach the full browser login flow from another machine.
+#                    Set it to this box's LAN IP (or a hostname the test
+#                    machine resolves here). It binds to 0.0.0.0, adds the
+#                    address to the dev TLS cert, rebuilds the SPA with its
+#                    IdP issuer pointed here, and registers the matching OIDC
+#                    redirect + CORS origin. DEV ONLY.
 
 set -euo pipefail
 
@@ -35,12 +41,29 @@ DP_BIN="$DATAPLANE/bin/dataplane"
 SKIP_UI="${SKIP_UI:-0}"
 WITH_TUNNEL="${WITH_TUNNEL:-0}"
 FORCE_UI="${FORCE_UI:-0}"
-BIND_HOST="${BIND_HOST:-127.0.0.1}"
+DEV_HOST="${DEV_HOST:-}"
+
+# DEV_HOST drives LAN access for the browser login flow. When set, every leg of
+# the OIDC flow must agree on a reachable address: services bind all interfaces,
+# the SPA is built with its issuer pointed here (VITE_IDP_ISSUER is baked in at
+# build time, so the UI must be rebuilt), and the redirect URI / CORS origin
+# match. Absent, everything stays on loopback as before.
+if [ -n "$DEV_HOST" ]; then
+  BIND_HOST="${BIND_HOST:-0.0.0.0}"
+  ORIGIN_HOST="$DEV_HOST"
+  IDP_ISSUER="https://$DEV_HOST:8300"
+  export VITE_IDP_ISSUER="$IDP_ISSUER"
+  FORCE_UI=1  # issuer is compiled into the bundle; force a rebuild
+else
+  BIND_HOST="${BIND_HOST:-127.0.0.1}"
+  ORIGIN_HOST="127.0.0.1"
+  IDP_ISSUER="https://idp.localhost:8300"
+fi
 
 # Dev origin the SPA is served from (the admin app itself). Enables the IdP CORS
 # allowance and the step-up return target.
-ADMIN_UI_ORIGIN="http://127.0.0.1:8400"
-ADMIN_UI_REDIRECT="http://127.0.0.1:8400/callback"
+ADMIN_UI_ORIGIN="http://$ORIGIN_HOST:8400"
+ADMIN_UI_REDIRECT="http://$ORIGIN_HOST:8400/callback"
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
@@ -77,7 +100,10 @@ else
   make -C "$ROOT" gen-keys
 fi
 
-if [ -f "$CERT" ]; then
+if [ -n "$DEV_HOST" ]; then
+  log "regenerating dev TLS certs to cover $DEV_HOST (needed for the token fetch)"
+  DEV_CERT_EXTRA="$DEV_HOST" make -C "$ROOT" gen-certs
+elif [ -f "$CERT" ]; then
   log "dev TLS certs present, keeping them"
 else
   log "generating self-signed dev TLS certs (WebAuthn needs a secure context)"
@@ -162,9 +188,9 @@ cat <<EOF
 
 $(printf '\033[1;32mhyproxy is up.\033[0m')
 
-  IdP        https://idp.localhost:8300     (bound to $BIND_HOST)
-  Admin API  http://$BIND_HOST:8400   (UI served here when built)
-  Authz      http://$BIND_HOST:8500   (internal only)
+  IdP        $IDP_ISSUER     (bound to $BIND_HOST)
+  Admin UI   $ADMIN_UI_ORIGIN   (open this; API served here too)
+  Authz      http://$ORIGIN_HOST:8500   (internal only)
   Data plane https://localhost:8443  (Host-routed to backends in dataplane/config.example.json)
 
 Note: the routes use *.localhost hostnames (idp.localhost, auth.localhost,
