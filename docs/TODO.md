@@ -91,7 +91,7 @@ below are what remains.
 - [ ] CI. There is no `.github/` workflow. Wire `make check`, `make audit`,
       `make dp-test`, and the integration/e2e suites into CI so the quality gates
       that `ROLLOUT.md` requires run on every change, not just locally.
-- [ ] `*.localhost` name resolution. `run.sh` assumes the resolver maps
+- [ ] `*.localhost` name resolution. `start-dev.sh` assumes the resolver maps
       `*.localhost` to loopback and only warns otherwise. Document (or script,
       without editing `/etc/hosts` automatically) the host entries dev needs.
 - [ ] Verify recorded phase status. Project memory notes "Phases 1-3 done, 4-5

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import click
-from sqlalchemy import CursorResult, delete
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hyproxy.config import get_settings
@@ -113,9 +113,20 @@ def bootstrap_admin(email: str, display_name: str) -> None:
 @click.option("--name", "client_name", required=True)
 @click.option("--redirect-uri", "redirect_uris", multiple=True, required=True)
 def create_client(client_id: str, client_name: str, redirect_uris: tuple[str, ...]) -> None:
-    """Register an OIDC relying party (public client, PKCE + DPoP required)."""
+    """Register an OIDC relying party (public client, PKCE + DPoP required).
 
-    async def do(session: AsyncSession) -> None:
+    Idempotent: re-running for an existing client-id updates its name and
+    redirect URIs instead of failing, so bootstrap can safely re-run.
+    """
+
+    async def do(session: AsyncSession) -> bool:
+        existing = await session.scalar(
+            select(OAuthClient).where(OAuthClient.client_id == client_id)
+        )
+        if existing is not None:
+            existing.client_name = client_name
+            existing.redirect_uris = list(redirect_uris)
+            return False
         session.add(
             OAuthClient(
                 client_id=client_id,
@@ -123,9 +134,10 @@ def create_client(client_id: str, client_name: str, redirect_uris: tuple[str, ..
                 redirect_uris=list(redirect_uris),
             )
         )
+        return True
 
-    run_db(do)
-    click.echo(f"registered client {client_id}")
+    created = run_db(do)
+    click.echo(f"{'registered' if created else 'updated'} client {client_id}")
 
 
 @cli.command("rotate-master-key")

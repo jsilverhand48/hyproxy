@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# run.sh: start hyproxy end to end for local development.
+# start-dev.sh: start hyproxy end to end for local development.
 #
 # Brings up the database, applies migrations, generates dev keys and certs,
 # builds the admin UI and the Go data plane, then launches every long-running

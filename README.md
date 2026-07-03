@@ -70,7 +70,7 @@ gateway RP (OIDC code+PKCE, DPoP) --> IdP login       allowlisted backend
 
 Three top-level orchestration scripts wrap the `make` targets end to end:
 
-- `./run.sh` starts the whole stack for local development: database, migrations,
+- `./start-dev.sh` starts the whole stack for local development: database, migrations,
   dev keys/certs, admin UI, Go data plane, then IdP + admin + authz + data plane
   together. Ctrl-C stops all of them. Toggles: `SKIP_UI=1`, `FORCE_UI=1`,
   `WITH_TUNNEL=1`.
