@@ -92,7 +92,23 @@ Production runs as a **hybrid**: the Go data plane is the only baremetal piece
 (the public TLS edge); everything else is containerized in `docker-compose.yml`
 and published on loopback only. See `docs/deployment.md` for the full topology.
 
-Production first run: `cp .env.example .env` and fill it in, author
+Updating a running deployment (what to rebuild and restart per change type,
+plus rollback): see `UPDATES.md`.
+
+Production, one command (Rocky Linux; prompts for domain, admin, and DNS-01
+credentials, then installs and starts the whole stack):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/install.sh | sh
+```
+
+`install.sh` clones the repo, writes `.env` and `/etc/hyproxy/acme.env`, runs
+`bootstrap-prod.sh`, issues the Let's Encrypt cert, installs the systemd units,
+and brings the stack up. It does not do the TPM secrets backend, WireGuard admin
+access, public DNS, or the security review. Full go-live steps and the hardening
+gate: `docs/production-checklist.md`.
+
+Manual first run instead: `cp .env.example .env` and fill it in, author
 `dataplane/config.json`, run `./bootstrap-prod.sh`, complete the
 `docs/production.md` section 5 checklist, then `./start-prod.sh`. See
 `docs/TODO.md` for open work and known gaps.

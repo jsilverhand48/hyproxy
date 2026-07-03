@@ -142,8 +142,12 @@ echo "This prepares a first production run: it installs missing dependencies,"
 echo "builds images, touches the production database, creates the first admin,"
 echo "and opens the public port in the host firewall. It does NOT start the"
 echo "public ingress (that is ./start-prod.sh)."
-read -r -p "Type 'bootstrap' to continue: " confirm
-[ "$confirm" = "bootstrap" ] || die "aborted"
+if [ "${HYPROXY_ASSUME_YES:-0}" = "1" ]; then
+  echo "HYPROXY_ASSUME_YES=1: proceeding without the interactive confirmation"
+else
+  read -r -p "Type 'bootstrap' to continue: " confirm
+  [ "$confirm" = "bootstrap" ] || die "aborted"
+fi
 
 # --- 1. Preflight: OS + toolchain (install anything missing) -----------------
 require_rocky

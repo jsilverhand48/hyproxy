@@ -11,7 +11,9 @@ tested in-repo are noted; the rest are deployment integrations.
 Production runs as a hybrid: the control plane is containerized and the Go data
 plane runs on baremetal. `docs/deployment.md` is the full topology reference.
 Supported platform: Rocky Linux only for now (the scripts use `dnf` and
-`firewalld`). Two scripts wrap this runbook:
+`firewalld`). For a hands-off install, `install.sh` prompts for config and runs
+the whole sequence end to end (`docs/production-checklist.md`); the rest of this
+section is the manual path it automates. Two scripts wrap this runbook:
 
 - `./bootstrap-prod.sh` runs once per deployment. On Rocky Linux it first
   installs any missing host dependencies (Docker + the compose plugin, the Go
