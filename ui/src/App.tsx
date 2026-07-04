@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { beginLogin, completeLogin, currentUserEmail, isAuthenticated, signOut } from "./lib/auth";
+import {
+  beginLogin,
+  completeLogin,
+  currentUserEmail,
+  isAdmin,
+  isAuthenticated,
+  showSignedIn,
+  signOut,
+} from "./lib/auth";
 import { Users } from "./views/Users";
 import { Roles } from "./views/Roles";
 import { Resources } from "./views/Resources";
@@ -35,6 +43,10 @@ export function App() {
         }
         if (!isAuthenticated()) {
           await beginLogin(); // navigates away; nothing below runs
+          return;
+        }
+        if (!isAdmin()) {
+          showSignedIn(); // navigates away; the panel must never render here
           return;
         }
         if (!cancelled) setBoot("ready");

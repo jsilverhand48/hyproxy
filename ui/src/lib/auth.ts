@@ -52,6 +52,19 @@ export function currentUserEmail(): string | null {
   return typeof email === "string" ? email : null;
 }
 
+
+// Tier is carried in the ID token's acr claim as "tier:<auth_tier>". The admin
+// panel must never render for a non-admin, so the app gates on this.
+export function isAdmin(): boolean {
+  return tokens?.idClaims?.acr === "tier:admin";
+}
+
+// Authenticated but not an admin: bounce to the IdP's signed-in page (which
+// offers a logout button) instead of ever exposing the panel.
+export function showSignedIn(): void {
+  window.location.assign(`${config.issuer}/auth/done`);
+}
+
 export async function beginLogin(): Promise<void> {
   const flow: FlowState = { verifier: randomToken(48), state: randomToken(16), nonce: randomToken(16) };
   sessionStorage.setItem(FLOW_KEY, JSON.stringify(flow));
