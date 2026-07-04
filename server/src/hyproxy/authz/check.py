@@ -9,7 +9,7 @@ same transaction.
 
 from datetime import UTC, datetime
 from typing import Annotated
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -66,6 +66,15 @@ async def _audit(
     await db.flush()
 
 
+def _admin_console_host() -> str | None:
+    """Host of the admin console (React SPA), derived from admin_ui_origin.
+    None when no admin UI is wired, so nothing is treated as the console."""
+    origin = get_settings().admin_ui_origin
+    if not origin:
+        return None
+    return (urlsplit(origin).hostname or "").lower() or None
+
+
 @router.post("/authz/check")
 async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
     settings = get_settings()
@@ -117,6 +126,23 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
             source_ip=body.source_ip,
         )
         return CheckResponse(decision="deny", reason="user_inactive")
+
+    # A standard-tier user must never be served the admin console; bounce the
+    # browser to the signed-in page instead of evaluating resource policy.
+    if user.auth_tier != "admin" and host == _admin_console_host():
+        signed_in = f"{settings.external_scheme}://{settings.auth_host}/auth/done"
+        await _audit(
+            db,
+            user_id=user.id,
+            resource_id=resource.id,
+            port=body.backend_port,
+            decision="deny",
+            reason="tier_forbidden",
+            source_ip=body.source_ip,
+        )
+        return CheckResponse(
+            decision="auth_required", reason="tier_forbidden", redirect=signed_in
+        )
 
     port = body.backend_port or (resource.ports[0] if resource.ports else 0)
     path = (body.uri or "/").split("?", 1)[0]

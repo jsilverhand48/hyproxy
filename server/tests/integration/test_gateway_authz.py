@@ -213,6 +213,35 @@ async def test_unauthenticated_check_returns_login_redirect(
     )
 
 
+async def test_standard_user_on_admin_console_redirected_to_signed_in(
+    authz_client: httpx.AsyncClient,
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "admin_ui_origin", "https://admin-ui.test")
+    await make_resource(db)  # APP_HOST target for the login return URL
+    resource = await make_resource(db, public_host="admin-ui.test")
+    user, cookie = await gateway_login(
+        authz_client, idp_client, db, make_password_hash, secrets_backend
+    )
+    assert user.auth_tier == "standard"
+
+    resp = await check(authz_client, host="admin-ui.test", cookie=cookie)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["decision"] == "auth_required"
+    assert body["redirect"] == f"https://{get_settings().auth_host}/auth/done"
+
+    audits = (await db.scalars(select(AuditLog).where(AuditLog.resource_id == resource.id))).all()
+    assert any(
+        a.decision == "deny" and a.reason == "tier_forbidden" and a.user_id == user.id
+        for a in audits
+    )
+
+
 async def test_default_deny_without_policy(
     authz_client: httpx.AsyncClient,
     idp_client: httpx.AsyncClient,
