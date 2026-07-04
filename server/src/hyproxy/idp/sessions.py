@@ -70,11 +70,18 @@ def clear_session_cookie(response: Response) -> None:
 
 
 async def check_liveness(
-    db: AsyncSession, session: Session, *, source_ip: str, now: datetime
+    db: AsyncSession, session: Session, *, source_ip: str, now: datetime, enforce_ip: bool = True
 ) -> bool:
     """Shared per-request session gate: revoked/stale, 6h absolute bound,
     30 min idle timeout (revokes on trip), and source-IP binding (marks stale
-    on change, forcing full re-auth). Touches last_seen_at on success."""
+    on change, forcing full re-auth). Touches last_seen_at on success.
+
+    enforce_ip=False skips the source-IP binding: used by the OIDC token
+    endpoint, whose caller is the OAuth client (e.g. the gateway's server-side
+    backchannel), not the browser, so its socket IP never matches the session.
+    The exchange is bound instead by single-use code, PKCE, and DPoP; IP binding
+    stays enforced on every browser cookie/bearer/gateway-check request.
+    """
     if session.revoked_at is not None or session.stale:
         return False
     if now >= session.absolute_expires_at:
@@ -82,7 +89,7 @@ async def check_liveness(
     if now - session.last_seen_at > timedelta(seconds=get_settings().idle_ttl):
         await revoke(db, session, reason="idle_timeout", source_ip=source_ip)
         return False
-    if str(session.source_ip) != source_ip:
+    if enforce_ip and str(session.source_ip) != source_ip:
         session.stale = True
         await db.flush()
         await emit(

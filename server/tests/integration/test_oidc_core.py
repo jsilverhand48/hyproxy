@@ -403,6 +403,34 @@ async def test_ip_change_marks_session_stale(
     assert resp.status_code == 400
 
 
+async def test_token_exchange_ignores_caller_ip(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+    rp_client: OAuthClient,
+) -> None:
+    """The token endpoint's caller is the OAuth client's server-side backchannel
+    (e.g. the gateway), not the browser, so its socket IP never matches the
+    session's. A differing IP must not fail the code exchange or mark the session
+    stale. Regression: gateway resource login failed with 'sign-in failed'."""
+    user = await login_standard(idp_client, db, make_password_hash, secrets_backend)
+    verifier = new_token(48)
+    code, _ = await get_code(idp_client, verifier)
+
+    session = await db.scalar(select(Session).where(Session.user_id == user.id))
+    assert session is not None
+    session.source_ip = "203.0.113.7"  # session bound to the browser IP...
+    await db.flush()
+
+    dpop = DpopClient()
+    resp = await exchange(idp_client, dpop, code, verifier)  # ...exchanged from a different IP
+    assert resp.status_code == 200, resp.text
+
+    await db.refresh(session)
+    assert session.stale is False
+
+
 async def test_idle_timeout_kills_refresh(
     idp_client: httpx.AsyncClient,
     db: AsyncSession,

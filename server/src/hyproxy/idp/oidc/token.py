@@ -60,7 +60,10 @@ async def _live_session(
     session = await db.get(Session, session_id)
     if session is None:
         return None
-    if not await sessions.check_liveness(db, session, source_ip=ip, now=now):
+    # The token endpoint's caller is the OAuth client's backchannel, not the
+    # browser, so its IP never matches the session's. Skip IP binding here; the
+    # exchange is bound by single-use code, PKCE, and DPoP.
+    if not await sessions.check_liveness(db, session, source_ip=ip, now=now, enforce_ip=False):
         return None
     return session
 
