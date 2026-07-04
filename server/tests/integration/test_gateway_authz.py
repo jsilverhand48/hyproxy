@@ -233,7 +233,7 @@ async def test_standard_user_on_admin_console_redirected_to_signed_in(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["decision"] == "auth_required"
-    assert body["redirect"] == f"https://{get_settings().auth_host}/auth/done"
+    assert body["redirect"] == f"{get_settings().issuer.rstrip('/')}/auth/done"
 
     audits = (await db.scalars(select(AuditLog).where(AuditLog.resource_id == resource.id))).all()
     assert any(

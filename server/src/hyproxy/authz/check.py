@@ -130,7 +130,10 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
     # A standard-tier user must never be served the admin console; bounce the
     # browser to the signed-in page instead of evaluating resource policy.
     if user.auth_tier != "admin" and host == _admin_console_host():
-        signed_in = f"{settings.external_scheme}://{settings.auth_host}/auth/done"
+        # /auth/done (which renders signedin.html) is an IdP route on the issuer
+        # host, not the auth host; and the IdP session cookie is scoped to the
+        # issuer, so the signed-in page must be fetched there.
+        signed_in = f"{settings.issuer.rstrip('/')}/auth/done"
         await _audit(
             db,
             user_id=user.id,
