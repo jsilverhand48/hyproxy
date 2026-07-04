@@ -50,6 +50,7 @@ async def get_valid_flow(
     source_ip: str,
     now: datetime,
     for_update: bool = False,
+    enforce_ip: bool = True,
 ) -> LoginFlow | None:
     """Load a live flow; expired or unknown flows return None.
 
@@ -61,6 +62,14 @@ async def get_valid_flow(
     differently, or the user's IP legitimately changes (mobile/CGNAT). The
     identity-bearing second-factor stage stays pinned; login_submit rebinds the
     flow to the authenticating client's IP.
+
+    enforce_ip=False skips that identity-stage pin: the second-factor pages run
+    on the browser->IdP hop, which reaches the control plane through the data
+    plane, so the source IP the IdP observes is only as stable as the forwarded
+    chain (mirrors the enforce_ip=False relaxation on session liveness for the
+    same hop). The flow stays bound by its single-use cookie, CSRF token, and
+    short TTL. Pass enforce_ip=False on the second-factor submit path so a
+    fluctuating forwarded client IP does not force a spurious 'start over'.
 
     Pass for_update=True on the second-factor submit path to lock the row: it
     serializes a duplicate submit behind the first so the loser observes the
@@ -75,7 +84,7 @@ async def get_valid_flow(
     flow = await session.get(LoginFlow, fid, with_for_update=for_update or None)
     if flow is None or flow.expires_at <= now:
         return None
-    if flow.user_id is not None and str(flow.source_ip) != source_ip:
+    if enforce_ip and flow.user_id is not None and str(flow.source_ip) != source_ip:
         return None  # authenticated-in-progress flow is pinned to its origin IP
     return flow
 

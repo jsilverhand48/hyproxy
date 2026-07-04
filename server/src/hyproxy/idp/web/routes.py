@@ -149,10 +149,17 @@ async def login_submit(
 async def get_stage_flow(
     request: Request, db: AsyncSession, flow_id: str | None, stage: str, *, for_update: bool = False
 ) -> LoginFlow | None:
-    """Shared guard for second-factor pages: valid flow, right stage, cookie match."""
+    """Shared guard for second-factor pages: valid flow, right stage, cookie match.
+
+    The source-IP pin is relaxed here (enforce_ip=False): these pages run on the
+    browser->IdP hop through the data plane, so the forwarded client IP can
+    fluctuate between the password step and the second-factor submit and would
+    otherwise force a spurious 'start over'. The flow cookie match below plus its
+    CSRF token and short single-use TTL remain the binding.
+    """
     now = datetime.now(UTC)
     flow_row = await flow_service.get_valid_flow(
-        db, flow_id, source_ip=client_ip(request), now=now, for_update=for_update
+        db, flow_id, source_ip=client_ip(request), now=now, for_update=for_update, enforce_ip=False
     )
     if flow_row is None or flow_row.stage != stage or flow_row.user_id is None:
         return None
