@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     # for dev self-signed certs.
     idp_internal_url: str = ""
     idp_verify_tls: bool = True
+    # Trust the data plane's X-Forwarded-For for the real client IP. Enable when
+    # the control plane sits behind the data plane (the sole TLS ingress, which
+    # sanitizes the header); leave off for direct-TLS/dev. Must be consistent
+    # everywhere or session source-IP binding force-loops re-auth.
+    trust_forwarded_for: bool = False
 
     # Admin UI (React SPA). Its origin (scheme://host[:port]) is the sole CORS
     # allowance on the IdP token/userinfo endpoints and the only permitted

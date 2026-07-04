@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hyproxy.config import get_settings
+from hyproxy.core.netutil import resolve_client_ip
 from hyproxy.db.engine import get_db
 from hyproxy.idp import sessions
 
@@ -19,8 +20,7 @@ DbDep = Annotated[AsyncSession, Depends(get_db)]
 
 
 def client_ip(request: Request) -> str:
-    assert request.client is not None
-    return request.client.host
+    return resolve_client_ip(request)
 
 
 def _expected_htu(request: Request) -> str:

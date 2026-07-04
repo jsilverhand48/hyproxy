@@ -25,6 +25,7 @@ from hyproxy.authz import gwkey
 from hyproxy.config import get_settings
 from hyproxy.core import secrets
 from hyproxy.core.crypto import constant_time_equals, new_token, sha256_hex
+from hyproxy.core.netutil import resolve_client_ip
 from hyproxy.db.engine import get_db
 from hyproxy.db.models import (
     GatewayLoginState,
@@ -43,8 +44,7 @@ DbDep = Annotated[AsyncSession, Depends(get_db)]
 
 
 def client_ip(request: Request) -> str:
-    assert request.client is not None
-    return request.client.host
+    return resolve_client_ip(request)
 
 
 async def valid_return_url(db: AsyncSession, rd: str) -> bool:

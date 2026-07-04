@@ -50,6 +50,9 @@ x-server-env: &server-env
   HYPROXY_GATEWAY_COOKIE_DOMAIN: ${HYPROXY_GATEWAY_COOKIE_DOMAIN:-}
   HYPROXY_IDP_INTERNAL_URL: ${HYPROXY_IDP_INTERNAL_URL:-}
   HYPROXY_IDP_VERIFY_TLS: ${HYPROXY_IDP_VERIFY_TLS:-true}
+  # Control plane sits behind the data plane (sole TLS ingress); trust its
+  # sanitized X-Forwarded-For so session source-IP binding uses the browser IP.
+  HYPROXY_TRUST_FORWARDED_FOR: ${HYPROXY_TRUST_FORWARDED_FOR:-false}
 
 x-healthcheck-defaults: &healthcheck-defaults
   interval: 5s

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hyproxy.audit.events import AuthEventType, emit
+from hyproxy.core.netutil import resolve_client_ip
 from hyproxy.core.secrets import get_secrets_backend
 from hyproxy.db.engine import get_db
 from hyproxy.db.models import LoginFlow, User
@@ -29,9 +30,7 @@ DbDep = Annotated[AsyncSession, Depends(get_db)]
 
 
 def client_ip(request: Request) -> str:
-    # Never trust forwarded headers: the IdP terminates its own TLS in Phase 1.
-    assert request.client is not None
-    return request.client.host
+    return resolve_client_ip(request)
 
 
 def set_flow_cookie(response: Response, flow_id: str) -> None:
