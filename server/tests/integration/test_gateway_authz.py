@@ -296,10 +296,48 @@ async def test_ip_change_forces_reauth(
         authz_client, idp_client, db, make_password_hash, secrets_backend
     )
     await grant(db, user, resource)
+    # A gateway cookie replayed from a different source IP than the session's
+    # origin is refused: the gateway session is IP-bound to the data plane's
+    # consistent view of the client.
     roamed = await check(authz_client, cookie=cookie, source_ip="198.51.100.7")
     assert roamed.json()["decision"] == "auth_required"
-    # The IdP session is now stale: even the original IP is locked out.
-    assert (await check(authz_client, cookie=cookie)).json()["decision"] == "auth_required"
+    # But a single mismatched request does not brick the session: the original
+    # IP still works. IP binding lives on the gateway session's own origin, not
+    # on the IdP session's separate browser->IdP vantage (re-checking that from
+    # the data plane was forcing a spurious cross-plane re-auth loop).
+    assert (await check(authz_client, cookie=cookie)).json()["decision"] == "allow"
+
+
+async def test_cross_plane_ip_mismatch_does_not_loop(
+    authz_client: httpx.AsyncClient,
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+) -> None:
+    """Regression: the IdP session is bound to the browser->IdP hop, while the
+    gateway check runs at the data plane's separate vantage. When those two
+    vantage points resolve the client to different IPs (a common deployment),
+    per-request checks must still allow as long as the gateway session's own
+    origin matches - otherwise every resource request bounces back to login and
+    the user never leaves the 2FA/redirect chain."""
+    resource = await make_resource(db)
+    user, cookie = await gateway_login(
+        authz_client, idp_client, db, make_password_hash, secrets_backend
+    )
+    await grant(db, user, resource)
+
+    gw = await db.scalar(select(GatewaySession).where(GatewaySession.user_id == user.id))
+    assert gw is not None
+    idp_session = await db.get(Session, gw.idp_session_id)
+    assert idp_session is not None
+    # The IdP recorded a different client IP than the data plane reports on
+    # /authz/check (distinct ingress paths). This must not deny access.
+    idp_session.source_ip = "203.0.113.50"
+    await db.flush()
+
+    allowed = await check(authz_client, cookie=cookie, source_ip="127.0.0.1")
+    assert allowed.json()["decision"] == "allow", allowed.text
 
 
 async def test_start_rejects_unregistered_return_url(

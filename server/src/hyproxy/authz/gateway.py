@@ -223,10 +223,21 @@ async def resolve_gateway_session(
         return None
     if not constant_time_equals(sha256_hex(secret), gw.cookie_secret_hash):
         return None
+    # IP-bind against the gateway session's own origin. Both this value (set at
+    # /gateway/callback) and the source_ip on every caller are observed at the
+    # data plane, the single ingress, so they agree. The IdP session is bound to
+    # the separate browser->IdP hop, whose vantage point need not resolve to the
+    # same client IP, so inherit only its liveness/revocation here
+    # (enforce_ip=False) rather than tripping a spurious re-auth loop on the
+    # cross-plane IP mismatch.
+    if str(gw.source_ip) != source_ip:
+        return None
     idp_session = await db.get(Session, gw.idp_session_id)
     if idp_session is None:
         return None
-    if not await idp_sessions.check_liveness(db, idp_session, source_ip=source_ip, now=now):
+    if not await idp_sessions.check_liveness(
+        db, idp_session, source_ip=source_ip, now=now, enforce_ip=False
+    ):
         return None
     return gw
 
