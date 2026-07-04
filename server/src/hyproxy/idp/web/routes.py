@@ -58,6 +58,9 @@ def error_page(request: Request, message: str, status: int = 400) -> HTMLRespons
 
 @router.get("/login")
 async def login_form(request: Request, db: DbDep, flow: str | None = None) -> Response:
+    already = await redirect_if_authenticated(request, db)
+    if already is not None:
+        return already
     now = datetime.now(UTC)
     ip = client_ip(request)
     existing = await flow_service.get_valid_flow(db, flow, source_ip=ip, now=now)

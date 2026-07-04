@@ -58,6 +58,30 @@ async def test_full_standard_login_with_totp(
     assert {"login.password.success", "login.totp.success", "session.created"} <= events
 
 
+async def test_authenticated_user_visiting_login_sees_signed_in_page(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+) -> None:
+    user = await create_user(db, make_password_hash, tier="standard", password=PW)
+    secret = await enroll_confirmed_totp(db, secrets_backend, user)
+
+    resp = await password_step(idp_client, user.email, PW)
+    page = await idp_client.get(resp.headers["location"])
+    fields = extract_form_fields(page.text)
+    done = await idp_client.post("/auth/totp", data={**fields, "code": current_code(secret)})
+    assert done.status_code == 200
+
+    # With a live session cookie, the login page must not be shown again.
+    redirect = await idp_client.get("/auth/login")
+    assert redirect.status_code == 303
+    assert redirect.headers["location"] == "/auth/done"
+
+    signed_in = await idp_client.get("/auth/login", follow_redirects=True)
+    assert "You are signed in" in signed_in.text
+
+
 async def test_duplicate_totp_submit_replays_idempotently(
     idp_client: httpx.AsyncClient,
     db: AsyncSession,
