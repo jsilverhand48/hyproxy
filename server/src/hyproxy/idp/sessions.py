@@ -90,8 +90,12 @@ async def check_liveness(
     enforce_ip=False skips the source-IP binding: used by the OIDC token
     endpoint, whose caller is the OAuth client (e.g. the gateway's server-side
     backchannel), not the browser, so its socket IP never matches the session.
-    The exchange is bound instead by single-use code, PKCE, and DPoP; IP binding
-    stays enforced on every browser cookie/bearer/gateway-check request.
+    The exchange is bound instead by single-use code, PKCE, and DPoP. IP binding
+    stays enforced on the data-plane resource path (check_request, whose caller
+    IP is observed at the single ingress and is stable). The browser session-
+    cookie resolver (get_session_from_cookie) also passes enforce_ip=False,
+    because it runs on the browser->IdP control-plane hop where the forwarded
+    client IP fluctuates.
     """
     if session.revoked_at is not None or session.stale:
         return False
@@ -120,7 +124,17 @@ async def check_liveness(
 async def get_session_from_cookie(
     db: AsyncSession, cookie_value: str | None, *, source_ip: str, now: datetime
 ) -> Session | None:
-    """Resolve and liveness-check the browser session cookie."""
+    """Resolve and liveness-check the browser session cookie.
+
+    Liveness is checked with enforce_ip=False: every caller is a browser->IdP
+    control-plane page (authorize, oidc logout, redirect_if_authenticated,
+    webauthn done/step-up), reached through the data plane, so the forwarded
+    client IP the IdP observes is not stable across the hop. Pinning it here
+    marks the just-issued session stale on the immediate post-login redirect and
+    bounces the user back into login. Mirrors resolve_gateway_session, which
+    inherits only this session's liveness/revocation for the same reason. The
+    data-plane resource path (check_request) keeps IP binding.
+    """
     if not cookie_value or "." not in cookie_value:
         return None
     sid_str, _, secret = cookie_value.partition(".")
@@ -133,7 +147,7 @@ async def get_session_from_cookie(
         return None
     if not constant_time_equals(sha256_hex(secret), session.cookie_secret_hash):
         return None
-    if not await check_liveness(db, session, source_ip=source_ip, now=now):
+    if not await check_liveness(db, session, source_ip=source_ip, now=now, enforce_ip=False):
         return None
     return session
 

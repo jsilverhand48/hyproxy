@@ -505,6 +505,32 @@ async def test_token_exchange_ignores_caller_ip(
     assert session.stale is False
 
 
+async def test_authorize_cookie_hop_ignores_forwarded_ip_change(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+    rp_client: OAuthClient,
+) -> None:
+    """The browser->IdP authorize hop resolves the session cookie at a vantage
+    whose forwarded client IP can differ from the one the session was minted at.
+    Re-issuing the OIDC code must still succeed and must not brick the session;
+    otherwise the post-2FA redirect to /oidc/authorize bounces back to login and
+    the user has to submit the 2FA page repeatedly. IP binding stays on the
+    data-plane resource path (see test_ip_change_marks_session_stale)."""
+    user = await login_standard(idp_client, db, make_password_hash, secrets_backend)
+    session = await db.scalar(select(Session).where(Session.user_id == user.id))
+    assert session is not None
+    session.source_ip = "198.51.100.42"  # authorize hop observes a different client IP
+    await db.flush()
+
+    code, _ = await get_code(idp_client, new_token(48))  # asserts 302 + code, not a login bounce
+    assert code
+
+    await db.refresh(session)
+    assert session.stale is False
+
+
 async def test_multiple_dpop_keys_on_one_session(
     idp_client: httpx.AsyncClient,
     db: AsyncSession,
