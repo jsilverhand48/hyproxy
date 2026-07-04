@@ -3,4 +3,7 @@
 {% block content %}
 <h1>You are signed in</h1>
 <p>Welcome, {{ user.display_name }}.</p>
+<form method="get" action="/oidc/logout">
+  <button type="submit">Log out</button>
+</form>
 {% endblock %}

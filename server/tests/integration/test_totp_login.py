@@ -80,6 +80,19 @@ async def test_authenticated_user_visiting_login_sees_signed_in_page(
 
     signed_in = await idp_client.get("/auth/login", follow_redirects=True)
     assert "You are signed in" in signed_in.text
+    assert 'action="/oidc/logout"' in signed_in.text
+
+    # The logout button ends the session and returns to the login page.
+    logout = await idp_client.get("/oidc/logout")
+    assert logout.status_code == 303
+    assert logout.headers["location"] == "/auth/login"
+    session = await db.scalar(select(Session).where(Session.user_id == user.id))
+    assert session is not None
+    assert session.revoked_at is not None
+
+    after = await idp_client.get("/auth/login", follow_redirects=True)
+    assert "Sign in" in after.text
+    assert "You are signed in" not in after.text
 
 
 async def test_duplicate_totp_submit_replays_idempotently(
