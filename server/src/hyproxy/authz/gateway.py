@@ -8,6 +8,7 @@ liveness, revocation, IP binding, and the 6h bound are all inherited), and
 sends the browser back to the app.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -35,6 +36,8 @@ from hyproxy.idp import sessions as idp_sessions
 from hyproxy.idp.oidc import tokens as token_service
 
 router = APIRouter(prefix="/gateway")
+
+logger = logging.getLogger(__name__)
 
 DbDep = Annotated[AsyncSession, Depends(get_db)]
 
@@ -130,27 +133,33 @@ async def callback(
     key = gwkey.gateway_dpop_key(secrets.get_secrets_backend())
     issuer = settings.issuer.rstrip("/")
     idp_http: httpx.AsyncClient = request.app.state.idp_http
-    token_resp = await idp_http.post(
-        "/oidc/token",
-        data={
-            "grant_type": "authorization_code",
-            "client_id": settings.gateway_client_id,
-            "code": code,
-            "redirect_uri": gateway_redirect_uri(),
-            "code_verifier": verifier,
-        },
-        headers={"DPoP": gwkey.make_proof(key, "POST", f"{issuer}/oidc/token")},
-    )
+    try:
+        token_resp = await idp_http.post(
+            "/oidc/token",
+            data={
+                "grant_type": "authorization_code",
+                "client_id": settings.gateway_client_id,
+                "code": code,
+                "redirect_uri": gateway_redirect_uri(),
+                "code_verifier": verifier,
+            },
+            headers={"DPoP": gwkey.make_proof(key, "POST", f"{issuer}/oidc/token")},
+        )
+    except httpx.HTTPError:
+        # Backchannel to the IdP is unreachable (DNS/TLS/timeout). Fail with a
+        # retryable status instead of an opaque 500, and leave a trace to debug.
+        logger.exception("gateway token backchannel to IdP failed (base_url=%s)", idp_http.base_url)
+        return PlainTextResponse("sign-in temporarily unavailable, try again", status_code=502)
     if token_resp.status_code != 200:
         return PlainTextResponse("sign-in failed, start over", status_code=400)
-    body = token_resp.json()
 
     try:
+        body = token_resp.json()
         access = await token_service.verify_access_token(db, token=body["access_token"], now=now)
         id_claims = await token_service.verify_id_token(
             db, token=body["id_token"], client_id=settings.gateway_client_id, now=now
         )
-    except token_service.TokenError:
+    except (token_service.TokenError, KeyError, ValueError):
         return PlainTextResponse("sign-in failed, start over", status_code=400)
     if id_claims.get("nonce") != nonce:
         return PlainTextResponse("sign-in failed, start over", status_code=400)

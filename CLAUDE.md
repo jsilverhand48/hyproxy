@@ -1,0 +1,4 @@
+When working in this repo, use Serena's symbol tools (get_symbols_overview,
+find_symbol, find_referencing_symbols) to navigate. Do not read whole files
+or symbol bodies unless the task requires the implementation. Prefer
+symbol-level edits (replace_symbol_body, rename_symbol) over full-file rewrites.
