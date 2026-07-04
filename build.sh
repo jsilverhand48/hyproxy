@@ -3,11 +3,10 @@
 # build.sh: build the hyproxy stack from current source, verify it is
 # functional, then STOP everything. Leaves NOTHING running.
 #
-# Same build surface as rebuild-staging.sh (the control-plane image AND the
-# baremetal Go data-plane binary), with one deliberate difference: it does not
-# start the data plane and does not leave containers up. It brings the stack up
-# only long enough to smoke-test it, then tears it all down. No lingering
-# processes, containers, or networks remain when the script exits.
+# Builds the hyproxy app and dataplane. it does not start the data plane and does 
+# not leave containers up. It brings the stack up only long enough to smoke-test it, 
+# then tears it all down. No lingering processes, containers, or networks remain 
+# when the script exits.
 #
 # Incremental by default: each component is rebuilt only when ITS OWN source
 # inputs changed since the last successful build (content hashes cached under
@@ -28,7 +27,7 @@
 #   RENDER_CONFIG=1   re-render dataplane/config.json from .env even if present
 #   SKIP_DATAPLANE=1  build/verify the containers only (skip the data-plane binary)
 #
-# Run from the repo root, with a valid .env (see docs/staging.md).
+# Run from the repo root, with a valid .env (see docs/prod.md).
 
 set -euo pipefail
 
@@ -65,7 +64,7 @@ log "preflight: toolchain + config"
 command -v docker >/dev/null || die "docker not found."
 docker compose version >/dev/null 2>&1 || die "the Docker Compose v2 plugin is required."
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable."
-[ -f "$ENV_FILE" ] || die "no .env at repo root (copy .env.staging.example; see docs/staging.md)."
+[ -f "$ENV_FILE" ] || die "no .env at repo root (copy .env.prod.example; see docs/prod.md)."
 
 # .env must be exported before the image build so Vite bakes the real issuer
 # (VITE_IDP_ISSUER <- HYPROXY_ISSUER) into the SPA; without it the served UI
@@ -197,6 +196,108 @@ fi
 cleanup() {
   log "stopping everything (leaving nothing running)"
   "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
+  # compose down only reaps THIS build's stack. Control-plane processes started
+  # outside compose (uvicorn idp/admin/authz via start-dev.sh or `make run-*`,
+  # the data plane, the dev Postgres) would otherwise survive and break the
+  # "nothing running" guarantee, so hand off to the comprehensive stopper.
+  
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  info() { printf '  %s\n' "$*"; }
+  step() { printf '==> %s\n' "$*"; }
+
+  # Gracefully TERM, then KILL after a short grace period, every process whose
+  # full command line matches an extended-regex pattern.
+  kill_pat() {
+    local desc="$1" pat="$2" pids
+    pids="$(pgrep -f "$pat" 2>/dev/null || true)"
+    if [ -z "$pids" ]; then
+      info "$desc: not running"
+      return
+    fi
+    info "$desc: stopping ($(echo "$pids" | tr '\n' ' '))"
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    for _ in 1 2 3 4 5 6; do
+      sleep 0.3
+      pgrep -f "$pat" >/dev/null 2>&1 || return
+    done
+    pids="$(pgrep -f "$pat" 2>/dev/null || true)"
+    if [ -n "$pids" ]; then
+      info "$desc: forcing (SIGKILL)"
+      # shellcheck disable=SC2086
+      kill -9 $pids 2>/dev/null || true
+    fi
+  }
+
+  # --- 1. Frontend dev servers (Vite UI + guac tunnel) -------------------------
+  step "frontend dev servers"
+  kill_pat "ui dev server (vite)" "${ROOT}/ui/node_modules/.*vite"
+  kill_pat "guac tunnel"          "${ROOT}/tunnel/node_modules/.*(vite|tunnel)|${ROOT}/tunnel .*npm"
+
+  # --- 2. Go data plane --------------------------------------------------------
+  step "data plane"
+  kill_pat "dataplane binary" "bin/dataplane( |$)|/dataplane/bin/dataplane"
+
+  # --- 3. Control-plane apps (uvicorn: idp / admin / authz) ---------------------
+  step "control-plane apps"
+  kill_pat "uvicorn (idp/admin/authz)" "uvicorn hyproxy\.(idp|admin|authz)\.app:app"
+
+  # --- 4. Docker Compose stack -------------------------------------------------
+  step "docker containers"
+  if command -v docker >/dev/null 2>&1; then
+    if [ -f "${ROOT}/docker-compose.yml" ]; then
+      # `down` removes every service in the project regardless of profile; name it
+      # explicitly so we hit the stack even when run from elsewhere.
+      (cd "$ROOT" && docker compose -p hyproxy down --remove-orphans 2>/dev/null) \
+        && info "compose project 'hyproxy' brought down" \
+        || info "compose down reported nothing to do"
+    else
+      info "no docker-compose.yml here; skipping compose"
+    fi
+    # Belt and suspenders: stop any stray containers named hyproxy-*.
+    cids="$(docker ps -q --filter 'name=hyproxy-' 2>/dev/null || true)"
+    if [ -n "$cids" ]; then
+      info "stopping leftover hyproxy-* containers"
+      # shellcheck disable=SC2086
+      docker stop $cids >/dev/null 2>&1 || true
+    fi
+  else
+    info "docker not installed; skipping containers"
+  fi
+
+  # --- 5. systemd units (production installs only) -----------------------------
+  step "systemd units"
+  if command -v systemctl >/dev/null 2>&1; then
+    for unit in hyproxy-dataplane.service hyproxy-acme.timer hyproxy-acme.service; do
+      if systemctl cat "$unit" >/dev/null 2>&1; then
+        if systemctl is-active --quiet "$unit"; then
+          if systemctl stop "$unit" 2>/dev/null; then
+            info "$unit: stopped"
+          else
+            info "$unit: active but stop failed (run as root: 'systemctl stop $unit')"
+          fi
+        else
+          info "$unit: not active"
+        fi
+      fi
+    done
+  else
+    info "systemctl not available; skipping units"
+  fi
+
+  # --- 6. Postgres dev cluster (user-space pgserver) ---------------------------
+  step "postgres dev cluster"
+  if [ -d "${ROOT}/server/.dev" ] && command -v uv >/dev/null 2>&1; then
+    (cd "${ROOT}/server" && uv run python scripts/devdb.py stop 2>/dev/null) \
+      && info "dev cluster stopped" \
+      || info "dev cluster not running"
+  else
+    info "no user-space dev cluster (server/.dev absent or uv missing)"
+  fi
+
+  step "done - hyproxy stopped"
+  log "done - all processes stopped"
 }
 trap cleanup EXIT
 
@@ -250,7 +351,7 @@ for svc in idp admin authz; do
 done
 
 # The data plane binds :443 with TLS and forward-auths against the running
-# control plane, so a full runtime check belongs to start-staging.sh, not to a
+# control plane, so a full runtime check belongs to start-prod.sh, not to a
 # build. Here the functional guarantee is that it compiled and produced an
 # executable binary (the build above would have failed otherwise).
 if [ "$SKIP_DATAPLANE" != "1" ]; then
@@ -274,6 +375,6 @@ $(printf '\033[1;32mbuild verified; stack stopped.\033[0m')
   Data plane $([ "$SKIP_DATAPLANE" = "1" ] && echo "skipped (SKIP_DATAPLANE=1)" || { [ "$NEED_DP" = "1" ] && echo "binary rebuilt" || echo "binary reused"; })
   Containers verified healthy, then stopped (no lingering processes)
 
-This script only builds + verifies. To run staging for real, use start-staging.sh.
+This script only builds + verifies. Use start-prod.sh to run.
 EOF
 # cleanup() runs on EXIT and stops everything.
