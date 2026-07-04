@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -50,6 +51,9 @@ type Server struct {
 	authHost     string
 	staticRoutes map[string]config.Route
 	guacBackend  string
+	// transport backs every upstream proxy; nil uses http.DefaultTransport
+	// (verifies TLS). Non-nil only when upstream verification is disabled.
+	transport http.RoundTripper
 }
 
 func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Server, error) {
@@ -57,14 +61,20 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 	if err != nil {
 		return nil, err
 	}
+	var transport http.RoundTripper
+	if cfg.UpstreamInsecureSkipVerify {
+		transport = insecureUpstreamTransport()
+		log.Warn("upstream TLS verification disabled for https backends (upstream_insecure_skip_verify=true)")
+	}
 	s := &Server{
 		authz:        checker,
 		cookieName:   cfg.GatewayCookieName,
-		authProxy:    newReverseProxy(authBackend, log),
+		authProxy:    newReverseProxy(authBackend, log, transport),
 		log:          log,
 		authHost:     cfg.AuthHost,
 		staticRoutes: cfg.Routes,
 		guacBackend:  cfg.GuacBackend,
+		transport:    transport,
 	}
 	// Initial snapshot: static infra routes only. The management plane
 	// (idp/admin) is reachable even if the control plane is down at boot; DB
@@ -107,7 +117,7 @@ func (s *Server) buildRouteSet(dbRoutes map[string]config.Route) (*routeSet, err
 			delete(merged, host)
 			continue
 		}
-		proxies[host] = newReverseProxy(u, s.log)
+		proxies[host] = newReverseProxy(u, s.log, s.transport)
 	}
 	return &routeSet{table: routing.NewTableFrom(s.authHost, merged), proxies: proxies}, nil
 }
@@ -123,8 +133,18 @@ func (s *Server) SwapRoutes(dbRoutes map[string]config.Route) error {
 	return nil
 }
 
-func newReverseProxy(backend *url.URL, log *slog.Logger) *httputil.ReverseProxy {
+// insecureUpstreamTransport clones the default transport and disables TLS
+// verification for upstream (backend) connections only. See
+// config.Config.UpstreamInsecureSkipVerify for the security caveats.
+func insecureUpstreamTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // operator opt-in for backends without valid certs
+	return t
+}
+
+func newReverseProxy(backend *url.URL, log *slog.Logger, transport http.RoundTripper) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
+		Transport: transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(backend)         // never derived from the client (SSRF invariant)
 			pr.SetXForwarded()         // replaces inbound X-Forwarded-*, no spoof passthrough

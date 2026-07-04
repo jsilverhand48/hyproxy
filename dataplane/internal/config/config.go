@@ -54,6 +54,12 @@ type Config struct {
 	// RoutesRefreshSecs is how often to poll the control plane for DB routes.
 	// Zero uses DefaultRoutesRefreshSecs.
 	RoutesRefreshSecs int `json:"routes_refresh_secs"`
+	// UpstreamInsecureSkipVerify disables TLS certificate verification when the
+	// proxy dials https backends. Operator escape hatch for backends with
+	// self-signed or IP-only certs (e.g. Plex on a bare IP); it does NOT relax
+	// the public listener's TLS or the SSRF allowlist. Leave false in any
+	// setting where upstream traffic can be tampered with.
+	UpstreamInsecureSkipVerify bool `json:"upstream_insecure_skip_verify,omitempty"`
 }
 
 // DefaultRoutesRefreshSecs is the DB-route poll interval when unset.

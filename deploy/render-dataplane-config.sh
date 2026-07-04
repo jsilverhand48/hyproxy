@@ -26,6 +26,8 @@
 #   IDP_BACKEND/ADMIN_BACKEND/AUTHZ_BACKEND  loopback origins (sane defaults)
 #   GUAC_BACKEND       tunnel origin for DB vnc/rdp/ssh routes (default guac:8600)
 #   ROUTES_REFRESH_SECS  DB-route poll interval (default 10)
+#   DP_UPSTREAM_INSECURE_SKIP_VERIFY  "true" to skip TLS verification on https
+#                      backends (self-signed / IP-only certs). Default false.
 
 set -euo pipefail
 
@@ -41,6 +43,10 @@ ADMIN_BACKEND="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
 AUTHZ_BACKEND="${AUTHZ_BACKEND:-http://127.0.0.1:8500}"
 GUAC_BACKEND="${GUAC_BACKEND:-http://127.0.0.1:8600}"
 ROUTES_REFRESH_SECS="${ROUTES_REFRESH_SECS:-10}"
+case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
+  true|1|yes) UPSTREAM_INSECURE=true ;;
+  *) UPSTREAM_INSECURE=false ;;
+esac
 
 cat > "$DP_OUT" <<JSON
 {
@@ -53,6 +59,7 @@ cat > "$DP_OUT" <<JSON
   "gateway_cookie_name": "__Secure-gw",
   "guac_backend": "$GUAC_BACKEND",
   "routes_refresh_secs": $ROUTES_REFRESH_SECS,
+  "upstream_insecure_skip_verify": $UPSTREAM_INSECURE,
   "routes": {
     "idp.$STAGING_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
     "admin.$STAGING_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
