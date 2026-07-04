@@ -71,6 +71,15 @@ esac
 case "$HYPROXY_ISSUER" in
   *example.com*) die "HYPROXY_ISSUER still points at example.com; set your real STAGING_DOMAIN hosts in .env" ;;
 esac
+
+# Gateway topology: derive from STAGING_DOMAIN unless the operator set it in .env.
+# These reach the control-plane containers (docker-compose server-env) so the authz
+# service and the cli agree on gateway_redirect_uri(); the cookie domain is the
+# parent so the gateway session is shared across the auth host and app hosts.
+export HYPROXY_AUTH_HOST="${HYPROXY_AUTH_HOST:-auth.$STAGING_DOMAIN}"
+export HYPROXY_EXTERNAL_SCHEME="${HYPROXY_EXTERNAL_SCHEME:-https}"
+export HYPROXY_GATEWAY_COOKIE_DOMAIN="${HYPROXY_GATEWAY_COOKIE_DOMAIN:-$STAGING_DOMAIN}"
+log "gateway auth host: $HYPROXY_EXTERNAL_SCHEME://$HYPROXY_AUTH_HOST (cookie domain: $HYPROXY_GATEWAY_COOKIE_DOMAIN)"
 [ "${POSTGRES_PASSWORD:-change-me-strong}" = "change-me-strong" ] && \
   warn "POSTGRES_PASSWORD is the staging example default; set a real password in .env"
 
@@ -150,6 +159,10 @@ log "starting Postgres"
 
 log "applying migrations (one-shot container)"
 "${COMPOSE[@]}" run --rm migrate
+
+log "ensuring the data plane forward-auth (gateway) OIDC client is registered"
+"${COMPOSE[@]}" run --rm cli bootstrap-gateway-client \
+  || die "failed to register the gateway client; protected resources will 400 at /oidc/authorize"
 
 log "starting the control plane${HYPROXY_GUAC_CYPHER_KEY:+ + guac bridge}"
 "${COMPOSE[@]}" "${PROFILES[@]}" up -d --wait

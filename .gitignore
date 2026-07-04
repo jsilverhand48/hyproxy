@@ -6,8 +6,9 @@
 .venv/
 .env
 __pycache__/
+.serena/*
+!.serena/project.yml
 
-.env
 *.pyc
 *.pyo
 *.pyd

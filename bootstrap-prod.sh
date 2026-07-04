@@ -227,8 +227,12 @@ log "registering the admin-ui OIDC public client"
     --client-id admin-ui --name "Admin UI" --redirect-uri "$ADMIN_UI_REDIRECT" \
   || warn "admin-ui client already registered; continuing"
 
+log "registering the data plane forward-auth (gateway) OIDC client"
+"${COMPOSE[@]}" run --rm cli bootstrap-gateway-client \
+  || die "failed to register the gateway client; protected resources will 400 at /oidc/authorize"
+
 echo
-echo "Register resource relying parties (gateway clients) later with:"
+echo "Register additional OIDC relying parties (extra apps) with:"
 echo "  docker compose run --rm cli create-client --client-id <id> --name <name> --redirect-uri <uri>"
 
 # --- 5. Guacamole ------------------------------------------------------------

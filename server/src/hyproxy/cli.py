@@ -108,6 +108,23 @@ def bootstrap_admin(email: str, display_name: str) -> None:
     click.echo("next: sign in at /auth/login and enroll two passkeys at /auth/enroll/webauthn")
 
 
+async def _upsert_client(
+    session: AsyncSession, client_id: str, client_name: str, redirect_uris: list[str]
+) -> bool:
+    """Register or update an OIDC client; re-enables a disabled one. Returns
+    True when a new row was created, False when an existing one was updated."""
+    existing = await session.scalar(select(OAuthClient).where(OAuthClient.client_id == client_id))
+    if existing is not None:
+        existing.client_name = client_name
+        existing.redirect_uris = redirect_uris
+        existing.enabled = True
+        return False
+    session.add(
+        OAuthClient(client_id=client_id, client_name=client_name, redirect_uris=redirect_uris)
+    )
+    return True
+
+
 @cli.command("create-client")
 @click.option("--client-id", required=True)
 @click.option("--name", "client_name", required=True)
@@ -119,25 +136,30 @@ def create_client(client_id: str, client_name: str, redirect_uris: tuple[str, ..
     redirect URIs instead of failing, so bootstrap can safely re-run.
     """
 
-    async def do(session: AsyncSession) -> bool:
-        existing = await session.scalar(
-            select(OAuthClient).where(OAuthClient.client_id == client_id)
-        )
-        if existing is not None:
-            existing.client_name = client_name
-            existing.redirect_uris = list(redirect_uris)
-            return False
-        session.add(
-            OAuthClient(
-                client_id=client_id,
-                client_name=client_name,
-                redirect_uris=list(redirect_uris),
-            )
-        )
-        return True
-
-    created = run_db(do)
+    created = run_db(lambda s: _upsert_client(s, client_id, client_name, list(redirect_uris)))
     click.echo(f"{'registered' if created else 'updated'} client {client_id}")
+
+
+@cli.command("bootstrap-gateway-client")
+def bootstrap_gateway_client() -> None:
+    """Register the data plane's forward-auth OIDC client.
+
+    The client-id is settings.gateway_client_id and the redirect_uri is derived
+    from the same settings the authz service uses (HYPROXY_AUTH_HOST /
+    HYPROXY_EXTERNAL_SCHEME), so it byte-matches gateway_redirect_uri() and the
+    IdP's exact-match check passes. Idempotent: safe to run at bootstrap and on
+    every deploy. Without this, protected resources dead-end at the IdP's
+    /oidc/authorize with 'Unknown application'."""
+    from hyproxy.authz.gateway import gateway_redirect_uri
+
+    settings = get_settings()
+    client_id = settings.gateway_client_id
+    redirect_uri = gateway_redirect_uri()
+    created = run_db(lambda s: _upsert_client(s, client_id, "hyproxy gateway", [redirect_uri]))
+    click.echo(
+        f"{'registered' if created else 'updated'} gateway client "
+        f"{client_id} -> {redirect_uri}"
+    )
 
 
 @cli.command("rotate-master-key")

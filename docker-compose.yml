@@ -40,6 +40,16 @@ x-server-env: &server-env
   # (idp/web/webauthn_routes.py). When admin and idp are different hosts the
   # SPA's token exchange is cross-origin, so the IdP must know the UI origin.
   HYPROXY_ADMIN_UI_ORIGIN: ${HYPROXY_ADMIN_UI_ORIGIN:-}
+  # Gateway (data plane's OIDC relying party) + authz->IdP backchannel. These are
+  # documented operator knobs (.env.example); the control-plane containers and the
+  # cli need them so gateway_redirect_uri() resolves to the real public auth host
+  # (not the auth.localhost default). Defaults mirror hyproxy.config so an unset
+  # value keeps current behavior.
+  HYPROXY_AUTH_HOST: ${HYPROXY_AUTH_HOST:-auth.localhost}
+  HYPROXY_EXTERNAL_SCHEME: ${HYPROXY_EXTERNAL_SCHEME:-https}
+  HYPROXY_GATEWAY_COOKIE_DOMAIN: ${HYPROXY_GATEWAY_COOKIE_DOMAIN:-}
+  HYPROXY_IDP_INTERNAL_URL: ${HYPROXY_IDP_INTERNAL_URL:-}
+  HYPROXY_IDP_VERIFY_TLS: ${HYPROXY_IDP_VERIFY_TLS:-true}
 
 x-healthcheck-defaults: &healthcheck-defaults
   interval: 5s
