@@ -230,7 +230,10 @@ async def test_full_code_flow_with_dpop(
     assert claims.auth_tier == "standard"
 
     session = await db.get(Session, claims.sid)
-    assert session is not None and session.dpop_jkt == dpop.jkt
+    # DPoP binding lives on the issued token (claims.jkt) and the refresh family,
+    # not the session, so one session can serve multiple clients/keys.
+    assert session is not None
+    assert session.dpop_jkt is None
 
     ui = await userinfo_call(idp_client, dpop, body["access_token"])
     assert ui.status_code == 200
@@ -429,6 +432,31 @@ async def test_token_exchange_ignores_caller_ip(
 
     await db.refresh(session)
     assert session.stale is False
+
+
+async def test_multiple_dpop_keys_on_one_session(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+    rp_client: OAuthClient,
+) -> None:
+    """One IdP session serves several OIDC clients (e.g. the admin SPA and the
+    gateway), each with its own DPoP key. Successive code exchanges on that
+    session must not pin it to a single key. Regression: after the gateway
+    exchanged on the session, admin login failed with invalid_grant."""
+    await login_standard(idp_client, db, make_password_hash, secrets_backend)
+
+    v1 = new_token(48)
+    code1, _ = await get_code(idp_client, v1)
+    r1 = await exchange(idp_client, DpopClient(), code1, v1)
+    assert r1.status_code == 200, r1.text
+
+    # Same session, a second client presenting a DIFFERENT DPoP key.
+    v2 = new_token(48)
+    code2, _ = await get_code(idp_client, v2)
+    r2 = await exchange(idp_client, DpopClient(), code2, v2)
+    assert r2.status_code == 200, r2.text
 
 
 async def test_idle_timeout_kills_refresh(

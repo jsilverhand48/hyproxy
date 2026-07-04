@@ -147,12 +147,9 @@ async def _authorization_code_grant(
     if session is None:
         return _error("invalid_grant")
 
-    # DPoP key binding: first exchange pins the session to this key.
-    if session.dpop_jkt is None:
-        session.dpop_jkt = proof.jkt
-        await db.flush()
-    elif session.dpop_jkt != proof.jkt:
-        return _error("invalid_grant")
+    # DPoP sender-constraint is bound per issued token (access-token cnf.jkt) and
+    # per refresh-token family, not per session: one IdP session serves several
+    # OIDC clients (e.g. the admin SPA and the gateway), each with its own key.
 
     user = await db.get(User, session.user_id)
     if user is None or user.status != "active":
