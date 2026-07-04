@@ -44,16 +44,26 @@ async def create_flow(
 
 
 async def get_valid_flow(
-    session: AsyncSession, flow_id: str | None, *, source_ip: str, now: datetime
+    session: AsyncSession,
+    flow_id: str | None,
+    *,
+    source_ip: str,
+    now: datetime,
+    for_update: bool = False,
 ) -> LoginFlow | None:
-    """Load a live flow; expired, unknown, or wrong-source flows return None."""
+    """Load a live flow; expired, unknown, or wrong-source flows return None.
+
+    Pass for_update=True on the second-factor submit path to lock the row: it
+    serializes a duplicate submit behind the first so the loser observes the
+    completed flow and replays it, rather than both racing to burn it.
+    """
     if not flow_id:
         return None
     try:
         fid = uuid.UUID(flow_id)
     except ValueError:
         return None
-    flow = await session.get(LoginFlow, fid)
+    flow = await session.get(LoginFlow, fid, with_for_update=for_update or None)
     if flow is None or flow.expires_at <= now:
         return None
     if str(flow.source_ip) != source_ip:

@@ -53,6 +53,17 @@ async def create_session(
     return session, f"{session.id}.{secret}"
 
 
+async def reissue_cookie(db: AsyncSession, session: Session) -> str:
+    """Mint a fresh cookie secret for an existing session and return the new
+    cookie value. Only the hash is stored. Used to re-attach the browser on an
+    idempotent login replay, where the original secret (known only to the first
+    response) cannot be recovered."""
+    secret = new_token(32)
+    session.cookie_secret_hash = sha256_hex(secret)
+    await db.flush()
+    return f"{session.id}.{secret}"
+
+
 def set_session_cookie(response: Response, cookie_value: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,

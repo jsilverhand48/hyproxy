@@ -416,6 +416,12 @@ class LoginFlow(Base):
     webauthn_challenge: Mapped[bytes | None] = mapped_column(LargeBinary)
     recovery_used: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     oidc_request: Mapped[dict[str, Any]] = mapped_column(server_default=text("'{}'::jsonb"))
+    # Set once a second factor completes and a session is minted. Retained (not
+    # deleted) so a duplicate submit of the same single-use flow replays the same
+    # outcome instead of erroring on a burned flow.
+    completed_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE")
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=NOW)
     expires_at: Mapped[datetime]
 

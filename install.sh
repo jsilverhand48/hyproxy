@@ -3,9 +3,9 @@
 # install.sh: one-command production installer for hyproxy (Rocky Linux only).
 #
 # Usage (review first is recommended over piping straight to a shell):
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/jsilverhand48/hyproxy/master/install.sh | sh
 #   # safer:
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/jsilverhand48/hyproxy/master/install.sh -o install.sh
 #   less install.sh && sh install.sh
 #
 # It prompts (on the terminal, so it works under `curl | sh`) for the domain,

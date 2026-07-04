@@ -12,7 +12,7 @@ from hyproxy.config import get_settings
 from hyproxy.core import keys as key_service
 from hyproxy.core.secrets import generate_master_key_file, get_secrets_backend
 from hyproxy.db.engine import db_session
-from hyproxy.db.models import DpopJtiSeen, GuacGrant, OAuthClient, User
+from hyproxy.db.models import DpopJtiSeen, GuacGrant, LoginFlow, OAuthClient, User
 
 
 def run_db[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -220,7 +220,7 @@ def gc() -> None:
     """Delete expired DPoP jtis, gateway login states, spent guac grants; retire keys."""
     now = datetime.now(UTC)
 
-    async def do(session: AsyncSession) -> tuple[int, int, int, int]:
+    async def do(session: AsyncSession) -> tuple[int, int, int, int, int]:
         from hyproxy.authz.gateway import gc_login_states
 
         res = cast(
@@ -236,14 +236,20 @@ def gc() -> None:
                 )
             ),
         )
+        # Login flows are short-lived and retained past completion for idempotent
+        # replay; drop them once expired (completed or abandoned alike).
+        flows = cast(
+            CursorResult[Any],
+            await session.execute(delete(LoginFlow).where(LoginFlow.expires_at <= now)),
+        )
         retired = await key_service.gc_retired(session, now)
         states = await gc_login_states(session, now)
-        return res.rowcount or 0, retired, states, grants.rowcount or 0
+        return res.rowcount or 0, retired, states, grants.rowcount or 0, flows.rowcount or 0
 
-    jtis, retired, states, grants = run_db(do)
+    jtis, retired, states, grants, flows = run_db(do)
     click.echo(
-        f"deleted {jtis} expired dpop jtis, {states} login states, {grants} guac grants; "
-        f"retired {retired} signing keys"
+        f"deleted {jtis} expired dpop jtis, {states} login states, {grants} guac grants, "
+        f"{flows} login flows; retired {retired} signing keys"
     )
 
 

@@ -13,7 +13,7 @@ from hyproxy.audit.events import AuthEventType, emit
 from hyproxy.core.netutil import resolve_client_ip
 from hyproxy.core.secrets import get_secrets_backend
 from hyproxy.db.engine import get_db
-from hyproxy.db.models import LoginFlow, User
+from hyproxy.db.models import LoginFlow, Session, User
 from hyproxy.idp import flows as flow_service
 from hyproxy.idp import sessions
 from hyproxy.security import passwords, ratelimit
@@ -141,16 +141,34 @@ async def login_submit(
 
 
 async def get_stage_flow(
-    request: Request, db: AsyncSession, flow_id: str | None, stage: str
+    request: Request, db: AsyncSession, flow_id: str | None, stage: str, *, for_update: bool = False
 ) -> LoginFlow | None:
     """Shared guard for second-factor pages: valid flow, right stage, cookie match."""
     now = datetime.now(UTC)
-    flow_row = await flow_service.get_valid_flow(db, flow_id, source_ip=client_ip(request), now=now)
+    flow_row = await flow_service.get_valid_flow(
+        db, flow_id, source_ip=client_ip(request), now=now, for_update=for_update
+    )
     if flow_row is None or flow_row.stage != stage or flow_row.user_id is None:
         return None
     if request.cookies.get(FLOW_COOKIE) != str(flow_row.id):
         return None
     return flow_row
+
+
+async def redirect_if_authenticated(request: Request, db: AsyncSession) -> Response | None:
+    """A double-submit of a second-factor form races the single-use flow: the
+    first request burns it, the second finds it gone. If the browser already
+    holds a live session, the first submit won, so send them to the signed-in
+    page rather than a misleading 'start over' error."""
+    session = await sessions.get_session_from_cookie(
+        db,
+        request.cookies.get(sessions.SESSION_COOKIE),
+        source_ip=client_ip(request),
+        now=datetime.now(UTC),
+    )
+    if session is None:
+        return None
+    return RedirectResponse("/auth/done", status_code=303)
 
 
 async def flow_user(db: AsyncSession, flow_row: LoginFlow) -> User | None:
@@ -161,25 +179,16 @@ async def flow_user(db: AsyncSession, flow_row: LoginFlow) -> User | None:
     return user
 
 
-async def finalize_login(
-    db: AsyncSession, flow_row: LoginFlow, user: User, amr: list[str], ip: str
-) -> tuple[str, str | None]:
-    """Create the session, burn the flow. Returns (cookie_value, continue_url or None)."""
-    now = datetime.now(UTC)
-    _session, cookie_value = await sessions.create_session(
-        db, user=user, source_ip=ip, amr=amr, now=now
-    )
+def _continue_url(flow_row: LoginFlow) -> str | None:
     oidc_request = dict(flow_row.oidc_request)
-    await flow_service.delete_flow(db, flow_row)
-    continue_url = f"/oidc/authorize?{urlencode(oidc_request)}" if oidc_request else None
-    return cookie_value, continue_url
+    return f"/oidc/authorize?{urlencode(oidc_request)}" if oidc_request else None
 
 
-async def complete_second_factor(
-    request: Request, db: AsyncSession, flow_row: LoginFlow, user: User, amr: list[str]
+def _login_response(
+    request: Request, user: User, cookie_value: str, continue_url: str | None
 ) -> Response:
-    """Second factor proven: create the IdP session and hand off."""
-    cookie_value, continue_url = await finalize_login(db, flow_row, user, amr, client_ip(request))
+    """Land a completed login: resume the OIDC handshake if there is one, else
+    show the signed-in page. Sets the session cookie and clears the flow cookie."""
     if continue_url:
         resp: Response = RedirectResponse(continue_url, status_code=303)
     else:
@@ -187,6 +196,45 @@ async def complete_second_factor(
     sessions.set_session_cookie(resp, cookie_value)
     resp.delete_cookie(FLOW_COOKIE, path="/")
     return resp
+
+
+async def resume_completed_login(
+    db: AsyncSession, flow_row: LoginFlow, request: Request
+) -> tuple[str, str | None] | None:
+    """Replay an already-completed flow (idempotent duplicate submit): re-mint a
+    cookie for the session the winning submit created and return the same
+    continuation. Returns None if that session is gone or no longer live."""
+    assert flow_row.completed_session_id is not None
+    session = await db.get(Session, flow_row.completed_session_id)
+    if session is None or not await sessions.check_liveness(
+        db, session, source_ip=client_ip(request), now=datetime.now(UTC)
+    ):
+        return None
+    cookie_value = await sessions.reissue_cookie(db, session)
+    return cookie_value, _continue_url(flow_row)
+
+
+async def finalize_login(
+    db: AsyncSession, flow_row: LoginFlow, user: User, amr: list[str], ip: str
+) -> tuple[str, str | None]:
+    """Create the session and mark the flow completed. The flow is retained (not
+    deleted) and pinned to the new session so a duplicate submit replays the same
+    outcome. Returns (cookie_value, continue_url or None)."""
+    now = datetime.now(UTC)
+    session, cookie_value = await sessions.create_session(
+        db, user=user, source_ip=ip, amr=amr, now=now
+    )
+    flow_row.completed_session_id = session.id
+    await db.flush()
+    return cookie_value, _continue_url(flow_row)
+
+
+async def complete_second_factor(
+    request: Request, db: AsyncSession, flow_row: LoginFlow, user: User, amr: list[str]
+) -> Response:
+    """Second factor proven: create the IdP session and hand off."""
+    cookie_value, continue_url = await finalize_login(db, flow_row, user, amr, client_ip(request))
+    return _login_response(request, user, cookie_value, continue_url)
 
 
 async def second_factor_throttle(request: Request, db: AsyncSession, user: User) -> Response | None:
@@ -240,10 +288,18 @@ async def totp_submit(
 ) -> Response:
     now = datetime.now(UTC)
     ip = client_ip(request)
-    flow_row = await get_stage_flow(request, db, flow, "totp")
+    flow_row = await get_stage_flow(request, db, flow, "totp", for_update=True)
     if flow_row is None or not flow_service.verify_flow_csrf(flow_row, csrf_token):
-        return error_page(request, "Invalid request. Please start over.")
+        onward = await redirect_if_authenticated(request, db)
+        return onward or error_page(request, "Invalid request. Please start over.")
     user = await flow_user(db, flow_row)
+    if flow_row.completed_session_id is not None:
+        # Duplicate submit of a single-use flow the first request already
+        # completed: replay the same outcome instead of erroring.
+        resumed = await resume_completed_login(db, flow_row, request)
+        if resumed is None or user is None:
+            return error_page(request, "Your sign-in session expired. Please start over.")
+        return _login_response(request, user, *resumed)
     if user is None:
         return error_page(request, "Your sign-in session expired. Please start over.")
     throttled = await second_factor_throttle(request, db, user)
@@ -324,7 +380,8 @@ async def enroll_totp_submit(
     ip = client_ip(request)
     flow_row = await get_stage_flow(request, db, flow, "totp")
     if flow_row is None or not flow_service.verify_flow_csrf(flow_row, csrf_token):
-        return error_page(request, "Invalid request. Please start over.")
+        onward = await redirect_if_authenticated(request, db)
+        return onward or error_page(request, "Invalid request. Please start over.")
     user = await flow_user(db, flow_row)
     if user is None or user.auth_tier == "admin":
         return error_page(request, "Your sign-in session expired. Please start over.")
@@ -409,7 +466,8 @@ async def recovery_submit(
     ip = client_ip(request)
     flow_row = await get_stage_flow(request, db, flow, "totp")
     if flow_row is None or not flow_service.verify_flow_csrf(flow_row, csrf_token):
-        return error_page(request, "Invalid request. Please start over.")
+        onward = await redirect_if_authenticated(request, db)
+        return onward or error_page(request, "Invalid request. Please start over.")
     user = await flow_user(db, flow_row)
     if user is None:
         return error_page(request, "Your sign-in session expired. Please start over.")

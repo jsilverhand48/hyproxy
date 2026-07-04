@@ -38,6 +38,7 @@ from hyproxy.idp.web.routes import (
     finalize_login,
     flow_user,
     get_stage_flow,
+    resume_completed_login,
     second_factor_throttle,
     templates,
 )
@@ -93,7 +94,7 @@ async def _user_credentials(db: AsyncSession, user: User) -> list[WebAuthnCreden
 async def _guarded_flow(
     request: Request, db: AsyncSession, body: FlowBody
 ) -> tuple[LoginFlow, User] | JSONResponse:
-    flow_row = await get_stage_flow(request, db, body.flow, "webauthn")
+    flow_row = await get_stage_flow(request, db, body.flow, "webauthn", for_update=True)
     if flow_row is None or not flow_service.verify_flow_csrf(flow_row, body.csrf_token):
         return _json_error("invalid or expired sign-in flow", 400)
     user = await flow_user(db, flow_row)
@@ -151,6 +152,16 @@ async def webauthn_verify(request: Request, db: DbDep, body: AssertionBody) -> R
     if isinstance(guarded, JSONResponse):
         return guarded
     flow_row, user = guarded
+    if flow_row.completed_session_id is not None:
+        # Idempotent replay of a retried assertion against an already-completed flow.
+        resumed = await resume_completed_login(db, flow_row, request)
+        if resumed is None:
+            return _json_error("sign-in expired, start over", 400)
+        cookie_value, continue_url = resumed
+        resp = JSONResponse({"redirect": continue_url or "/auth/done"})
+        sessions.set_session_cookie(resp, cookie_value)
+        resp.delete_cookie(FLOW_COOKIE, path="/")
+        return resp
     throttled = await second_factor_throttle(request, db, user)
     if throttled is not None:
         return _json_error("too many attempts", 429)

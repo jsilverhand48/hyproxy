@@ -58,6 +58,43 @@ async def test_full_standard_login_with_totp(
     assert {"login.password.success", "login.totp.success", "session.created"} <= events
 
 
+async def test_duplicate_totp_submit_replays_idempotently(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+) -> None:
+    user = await create_user(db, make_password_hash, tier="standard", password=PW)
+    secret = await enroll_confirmed_totp(db, secrets_backend, user)
+
+    resp = await password_step(idp_client, user.email, PW)
+    page = await idp_client.get(resp.headers["location"])
+    fields = extract_form_fields(page.text)
+    flow_cookie = idp_client.cookies.get("__Host-login_flow")
+    assert flow_cookie is not None
+
+    first = await idp_client.post("/auth/totp", data={**fields, "code": current_code(secret)})
+    assert first.status_code == 200
+    assert "You are signed in" in first.text
+    assert "__Host-idp_sid" in first.headers.get("set-cookie", "")
+    created = (await db.scalars(select(Session).where(Session.user_id == user.id))).all()
+    assert len(created) == 1
+    session_id = created[0].id
+
+    # A duplicate submit (double-click, Enter, or one-time-code autofill) races the
+    # first: it still carries the flow cookie because the winner's response had not
+    # yet cleared it. It must replay the exact outcome, re-attaching the browser to
+    # the same session, not error out and not mint a second session.
+    idp_client.cookies.set("__Host-login_flow", flow_cookie, domain="idp.test", path="/")
+    dup = await idp_client.post("/auth/totp", data={**fields, "code": current_code(secret)})
+    assert dup.status_code == 200
+    assert "You are signed in" in dup.text
+    assert "__Host-idp_sid" in dup.headers.get("set-cookie", "")
+    assert "Invalid request" not in dup.text
+    still = (await db.scalars(select(Session).where(Session.user_id == user.id))).all()
+    assert {s.id for s in still} == {session_id}
+
+
 async def test_wrong_totp_code_rejected_and_throttled(
     idp_client: httpx.AsyncClient,
     db: AsyncSession,
