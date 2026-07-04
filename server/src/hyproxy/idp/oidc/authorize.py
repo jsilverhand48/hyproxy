@@ -10,7 +10,7 @@
 """
 
 from datetime import UTC, datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse, Response
@@ -139,3 +139,37 @@ async def authorize(request: Request, db: DbDep) -> Response:
     return RedirectResponse(
         f"{redirect_uri}?{urlencode({'code': code, 'state': state})}", status_code=302
     )
+
+
+@router.get("/oidc/logout")
+async def logout(request: Request, db: DbDep) -> Response:
+    """RP-initiated logout: revoke the IdP session and clear its cookie so the
+    next /oidc/authorize can no longer silently re-issue a code."""
+    now = datetime.now(UTC)
+    ip = client_ip(request)
+    session = await sessions.get_session_from_cookie(
+        db, request.cookies.get(sessions.SESSION_COOKIE), source_ip=ip, now=now
+    )
+    if session is not None:
+        await sessions.revoke(db, session, reason="logout", source_ip=ip)
+
+    # Only redirect to a post-logout URI whose origin matches a registered
+    # redirect_uri of the named client; never redirect to an unvalidated URI.
+    target = "/auth/login"
+    client_id = request.query_params.get("client_id")
+    requested = request.query_params.get("post_logout_redirect_uri")
+    if client_id and requested:
+        client = await db.scalar(
+            select(OAuthClient).where(
+                OAuthClient.client_id == client_id, OAuthClient.enabled.is_(True)
+            )
+        )
+        if client is not None:
+            want = urlsplit(requested)
+            allowed = {(urlsplit(u).scheme, urlsplit(u).netloc) for u in client.redirect_uris}
+            if (want.scheme, want.netloc) in allowed:
+                target = requested
+
+    resp = RedirectResponse(target, status_code=303)
+    sessions.clear_session_cookie(resp)
+    return resp

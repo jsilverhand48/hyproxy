@@ -139,5 +139,11 @@ export function beginStepUp(): void {
 
 export function signOut(): void {
   tokens = null;
-  void beginLogin();
+  // Full-page navigation to the IdP so it revokes the browser session and
+  // clears its cookie; otherwise /oidc/authorize would silently re-log-in.
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    post_logout_redirect_uri: `${window.location.origin}/`,
+  });
+  window.location.assign(`${config.issuer}/oidc/logout?${params.toString()}`);
 }
