@@ -200,6 +200,77 @@ async def test_unauthenticated_authorize_parks_request_in_flow(
     assert resp.headers["location"].startswith("/auth/login?flow=")
 
 
+async def test_parked_authorize_resumes_after_login(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+    rp_client: OAuthClient,
+) -> None:
+    user = await create_user(db, make_password_hash, tier="standard", password=PW)
+    secret = await enroll_confirmed_totp(db, secrets_backend, user)
+
+    parked = await idp_client.get("/oidc/authorize", params=authorize_params(new_token(48)))
+    assert parked.status_code == 303
+    login_loc = parked.headers["location"]
+    assert login_loc.startswith("/auth/login?flow=")
+
+    page = await idp_client.get(login_loc)
+    fields = extract_form_fields(page.text)
+    pw = await idp_client.post(
+        "/auth/login", data={**fields, "email": user.email, "password": PW}
+    )
+    assert pw.status_code == 303
+    totp_page = await idp_client.get(pw.headers["location"])
+    tfields = extract_form_fields(totp_page.text)
+
+    done = await idp_client.post("/auth/totp", data={**tfields, "code": pyotp.TOTP(secret).now()})
+    # Completing the second factor must resume the parked authorize, not dead-end
+    # on the signed-in page.
+    assert done.status_code == 303, done.text
+    assert done.headers["location"].startswith("/oidc/authorize"), done.headers["location"]
+
+
+async def test_parked_oidc_request_survives_forwarded_ip_change(
+    idp_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+    secrets_backend: FileSecretsBackend,
+    rp_client: OAuthClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hyproxy.config import get_settings
+
+    settings = get_settings().model_copy(update={"trust_forwarded_for": True})
+    monkeypatch.setattr("hyproxy.core.netutil.get_settings", lambda: settings)
+
+    user = await create_user(db, make_password_hash, tier="standard", password=PW)
+    secret = await enroll_confirmed_totp(db, secrets_backend, user)
+    ip_a = {"X-Forwarded-For": "203.0.113.10"}
+    ip_b = {"X-Forwarded-For": "203.0.113.20"}
+
+    # Park the request from one client IP, then finish the login from another
+    # (as happens when the authorize hop and the login hops resolve the client
+    # IP inconsistently). The OIDC continuation must not be lost.
+    parked = await idp_client.get(
+        "/oidc/authorize", params=authorize_params(new_token(48)), headers=ip_a
+    )
+    assert parked.status_code == 303
+    page = await idp_client.get(parked.headers["location"], headers=ip_b)
+    fields = extract_form_fields(page.text)
+    pw = await idp_client.post(
+        "/auth/login", data={**fields, "email": user.email, "password": PW}, headers=ip_b
+    )
+    assert pw.status_code == 303
+    totp_page = await idp_client.get(pw.headers["location"], headers=ip_b)
+    tfields = extract_form_fields(totp_page.text)
+    done = await idp_client.post(
+        "/auth/totp", data={**tfields, "code": pyotp.TOTP(secret).now()}, headers=ip_b
+    )
+    assert done.status_code == 303, done.text
+    assert done.headers["location"].startswith("/oidc/authorize"), done.headers["location"]
+
+
 # --- full code + token flow ----------------------------------------------------
 
 

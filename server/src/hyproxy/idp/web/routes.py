@@ -136,6 +136,9 @@ async def login_submit(
     second = flow_service.required_second_factor(user)
     flow_row.user_id = user.id
     flow_row.stage = second
+    # Pin the now identity-bearing flow to the authenticating client's IP; the
+    # second factor is enforced against this from here on.
+    flow_row.source_ip = ip
     await db.flush()
     return RedirectResponse(f"/auth/{second}?flow={flow}", status_code=303)
 

@@ -51,7 +51,16 @@ async def get_valid_flow(
     now: datetime,
     for_update: bool = False,
 ) -> LoginFlow | None:
-    """Load a live flow; expired, unknown, or wrong-source flows return None.
+    """Load a live flow; expired or unknown flows return None.
+
+    Source-IP binding is enforced only once the flow carries an identity
+    (user_id set, i.e. past the password step). The pre-auth authorize->login
+    handoff is deliberately not IP-bound: it holds only the RP's public authorize
+    params (re-validated at /oidc/authorize), and pinning it would drop the
+    parked request whenever the authorize and login hops resolve the client IP
+    differently, or the user's IP legitimately changes (mobile/CGNAT). The
+    identity-bearing second-factor stage stays pinned; login_submit rebinds the
+    flow to the authenticating client's IP.
 
     Pass for_update=True on the second-factor submit path to lock the row: it
     serializes a duplicate submit behind the first so the loser observes the
@@ -66,8 +75,8 @@ async def get_valid_flow(
     flow = await session.get(LoginFlow, fid, with_for_update=for_update or None)
     if flow is None or flow.expires_at <= now:
         return None
-    if str(flow.source_ip) != source_ip:
-        return None  # flow is bound to the IP that started it
+    if flow.user_id is not None and str(flow.source_ip) != source_ip:
+        return None  # authenticated-in-progress flow is pinned to its origin IP
     return flow
 
 
