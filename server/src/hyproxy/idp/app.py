@@ -14,14 +14,37 @@ from hyproxy.idp.oidc.userinfo import router as userinfo_router
 from hyproxy.idp.web.routes import router as web_router
 from hyproxy.idp.web.webauthn_routes import router as webauthn_router
 
-CSP = (
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
-    "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-)
+def _csp() -> str:
+    """Build the auth-surface CSP.
+
+    The post-login flow is a form submission (password / second-factor pages)
+    whose redirect chain deliberately leaves the IdP origin:
+    /auth/* -> /oidc/authorize -> the auth host's /gateway/callback -> the
+    resource the user originally requested. Browsers enforce form-action across
+    the *entire* redirect chain of a form navigation, so form-action 'self'
+    silently cancels the hop to the auth host: the user's second factor is
+    accepted (the session is created server-side) but the browser never moves,
+    and only a manual address-bar navigation - which form-action does not gate -
+    reaches the resource. Permit the deployment's own parent domain (the same
+    value that scopes the cross-subdomain gateway cookie) so the auth host and
+    every resource subdomain are reachable from these forms; 'self' alone breaks
+    the flow. When no cross-subdomain domain is configured the flow never leaves
+    'self', so nothing is widened.
+    """
+    form_action = "'self'"
+    domain = get_settings().gateway_cookie_domain
+    if domain:
+        form_action += f" https://*.{domain} https://{domain}"
+    return (
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+        f"connect-src 'self'; form-action {form_action}; "
+        "frame-ancestors 'none'; base-uri 'none'"
+    )
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="hyproxy-idp", docs_url=None, redoc_url=None, openapi_url=None)
+    csp = _csp()
 
     # The admin SPA (served on its own management-plane origin) must reach the
     # cross-origin token/userinfo endpoints. Allow exactly that one origin, the
@@ -43,7 +66,7 @@ def create_app() -> FastAPI:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response = await call_next(request)
-        response.headers.setdefault("Content-Security-Policy", CSP)
+        response.headers.setdefault("Content-Security-Policy", csp)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-Frame-Options", "DENY")

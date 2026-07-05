@@ -201,13 +201,23 @@ def _login_response(
     request: Request, user: User, cookie_value: str, continue_url: str | None
 ) -> Response:
     """Land a completed login: resume the OIDC handshake if there is one, else
-    show the signed-in page. Sets the session cookie and clears the flow cookie."""
+    show the signed-in page. Sets the session cookie.
+
+    The flow cookie is deliberately left in place. The flow row is retained (not
+    deleted) and pinned to the completed session so a duplicate or late second-
+    factor submit can replay the same outcome via resume_completed_login and,
+    crucially, re-emit the pending OIDC continuation that carries the browser
+    back to the resource it originally requested. Clearing the flow cookie here
+    made that replay unreachable: get_stage_flow requires the cookie, so a repeat
+    submit fell through to redirect_if_authenticated and dead-ended on
+    /auth/done, stranding the user on the signed-in page instead of the resource.
+    The cookie is a host-scoped session cookie bound by its CSRF token; it lapses
+    when the browser closes and is overwritten by the next login flow."""
     if continue_url:
         resp: Response = RedirectResponse(continue_url, status_code=303)
     else:
         resp = templates.TemplateResponse(request, "signedin.html", {"user": user})
     sessions.set_session_cookie(resp, cookie_value)
-    resp.delete_cookie(FLOW_COOKIE, path="/")
     return resp
 
 

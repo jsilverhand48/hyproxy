@@ -31,7 +31,6 @@ from hyproxy.db.models import LoginFlow, User, WebAuthnCredential
 from hyproxy.idp import flows as flow_service
 from hyproxy.idp import sessions
 from hyproxy.idp.web.routes import (
-    FLOW_COOKIE,
     DbDep,
     client_ip,
     error_page,
@@ -160,7 +159,6 @@ async def webauthn_verify(request: Request, db: DbDep, body: AssertionBody) -> R
         cookie_value, continue_url = resumed
         resp = JSONResponse({"redirect": continue_url or "/auth/done"})
         sessions.set_session_cookie(resp, cookie_value)
-        resp.delete_cookie(FLOW_COOKIE, path="/")
         return resp
     throttled = await second_factor_throttle(request, db, user)
     if throttled is not None:
@@ -217,10 +215,11 @@ async def webauthn_verify(request: Request, db: DbDep, body: AssertionBody) -> R
             detail={"friendly_name": row.friendly_name},
         )
 
+    # Flow cookie retained so a retried assertion replays to the resource (see
+    # _login_response); clearing it here dead-ended repeat submits on /auth/done.
     cookie_value, continue_url = await finalize_login(db, flow_row, user, ["pwd", "webauthn"], ip)
     resp = JSONResponse({"redirect": continue_url or "/auth/done"})
     sessions.set_session_cookie(resp, cookie_value)
-    resp.delete_cookie(FLOW_COOKIE, path="/")
     return resp
 
 
