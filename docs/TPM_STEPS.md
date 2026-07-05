@@ -26,7 +26,8 @@ The work is in three parts:
 All of this is now implemented: `tpm_unseal()` shells out to `tpm2_unseal`
 against the persistent handle in `HYPROXY_TPM_SEALED_BLOB` under the PCR
 policy in `HYPROXY_TPM_PCRS` (default `sha256:0,2,4,7`), the server image
-includes tpm2-tools, and `deploy/docker-compose.tpm.yml` passes the TPM device
+includes tpm2-tools, and `docker-compose.yml` (the `x-tpm-access` block,
+driven by `HYPROXY_TPM_DEVICE` and `TSS_GID` in `.env`) passes the TPM device
 into the control-plane services. `install.sh` automates Parts 2-4 end to end
 for production installs (seal at install time, one-time plaintext printout for
 the FIPS backup device, migration off a pre-existing file key, rotation, and

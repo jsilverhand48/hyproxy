@@ -35,6 +35,11 @@ x-server-env: &server-env
   HYPROXY_ISSUER: ${HYPROXY_ISSUER:-https://idp.localhost:8300}
   HYPROXY_SECRETS_BACKEND: ${HYPROXY_SECRETS_BACKEND:-file}
   HYPROXY_MASTER_KEY_FILE: /run/secrets/master_key
+  # TPM secrets backend (HYPROXY_SECRETS_BACKEND=tpm): persistent handle of the
+  # sealed master key and the PCR selection it was sealed under (must match
+  # sealing time). Unused (empty) under the default file backend.
+  HYPROXY_TPM_SEALED_BLOB: ${HYPROXY_TPM_SEALED_BLOB:-}
+  HYPROXY_TPM_PCRS: ${HYPROXY_TPM_PCRS:-sha256:0,2,4,7}
   # The IdP needs this too, not just the admin app: it scopes the IdP's CORS
   # allowance (idp/app.py) and validates the step-up return_to
   # (idp/web/webauthn_routes.py). When admin and idp are different hosts the
@@ -53,6 +58,22 @@ x-server-env: &server-env
   # Control plane sits behind the data plane (sole TLS ingress); trust its
   # sanitized X-Forwarded-For so session source-IP binding uses the browser IP.
   HYPROXY_TRUST_FORWARDED_FOR: ${HYPROXY_TRUST_FORWARDED_FOR:-false}
+
+# TPM secrets backend: pass the host TPM resource-manager device into every
+# control-plane service that needs the master key, so tpm_unseal
+# (core/secrets.py) can run tpm2_unseal inside the container. The container
+# user (uid 10001) is not in the host 'tss' group that owns the device, so its
+# numeric gid is granted via group_add; install.sh resolves it into TSS_GID in
+# .env and sets HYPROXY_TPM_DEVICE=/dev/tpmrm0 (plus
+# HYPROXY_MASTER_KEY_FILE=/dev/null so the master_key secret below resolves
+# without unsealed key material on disk). Under the default file backend both
+# defaults are no-ops: /dev/null is mapped onto itself and the container
+# user's own gid is re-added.
+x-tpm-access: &tpm-access
+  devices:
+    - "${HYPROXY_TPM_DEVICE:-/dev/null}:${HYPROXY_TPM_DEVICE:-/dev/null}"
+  group_add:
+    - "${TSS_GID:-10001}"
 
 x-healthcheck-defaults: &healthcheck-defaults
   interval: 5s
@@ -81,6 +102,7 @@ services:
 
   # --- one-shot tools (profile: tools) --------------------------------------
   migrate:
+    <<: *tpm-access
     profiles: [tools]
     build: *server-build
     image: hyproxy-server:local
@@ -98,6 +120,7 @@ services:
   #   docker compose run --rm cli bootstrap-admin --email you@example.com --name "You"
   #   docker compose run --rm cli create-client --client-id admin-ui --name "Admin UI" --redirect-uri ...
   cli:
+    <<: *tpm-access
     profiles: [tools]
     build: *server-build
     image: hyproxy-server:local
@@ -112,6 +135,7 @@ services:
 
   # --- control plane (profile: app) -----------------------------------------
   idp:
+    <<: *tpm-access
     profiles: [app]
     build: *server-build
     image: hyproxy-server:local
@@ -136,6 +160,7 @@ services:
     restart: unless-stopped
 
   admin:
+    <<: *tpm-access
     profiles: [app]
     build: *server-build
     image: hyproxy-server:local
@@ -160,6 +185,7 @@ services:
     restart: unless-stopped
 
   authz:
+    <<: *tpm-access
     profiles: [app]
     build: *server-build
     image: hyproxy-server:local
@@ -219,7 +245,8 @@ volumes:
 
 secrets:
   # File secrets backend: the master key is mounted read-only into the control
-  # plane. For the TPM backend, pass the TPM device into these services instead
-  # (see docs/deployment.md) or run the control plane on baremetal.
+  # plane. For the TPM backend the device passthrough (x-tpm-access above)
+  # supplies the key; set HYPROXY_MASTER_KEY_FILE=/dev/null in .env so this
+  # secret still resolves without unsealed key material on disk.
   master_key:
     file: ${HYPROXY_MASTER_KEY_FILE:-./server/.dev/master.keys}

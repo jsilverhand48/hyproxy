@@ -119,4 +119,6 @@ below are what remains.
 - [ ] Start scripts should be able to automatically detect if a rebuild needs
       needs to be initiated if there were changes done to the source code that
       require rebuild.
-- [ ] QR code for 2FA standard users
+- [x] QR code for 2FA standard users
+- [ ] Sunset file based masterkey and secret
+- [ ] Validate docker based tpm backend is best approach

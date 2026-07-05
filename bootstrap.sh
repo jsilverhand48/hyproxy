@@ -165,10 +165,13 @@ set -a
 . "$ENV_FILE"
 set +a
 
-# TPM secrets backend: layer the device-passthrough overlay onto every compose
-# invocation here (the explicit -f above bypasses any COMPOSE_FILE in .env).
+# TPM secrets backend: the device passthrough is built into docker-compose.yml
+# (x-tpm-access) via HYPROXY_TPM_DEVICE / TSS_GID substitutions with no-op
+# defaults for the file backend; resolve and validate them here.
 if [ "${HYPROXY_SECRETS_BACKEND:-file}" = "tpm" ]; then
-  COMPOSE+=(-f "$ROOT/deploy/docker-compose.tpm.yml")
+  export HYPROXY_TPM_DEVICE="${HYPROXY_TPM_DEVICE:-/dev/tpmrm0}"
+  : "${TSS_GID:?TSS_GID must be set in .env to the gid of the host 'tss' group}"
+  : "${HYPROXY_TPM_SEALED_BLOB:?HYPROXY_TPM_SEALED_BLOB must be set in .env (persistent handle of the sealed master key)}"
 fi
 
 log "preflight: required configuration"
@@ -191,8 +194,8 @@ BACKEND="${HYPROXY_SECRETS_BACKEND:-file}"
 log "secrets backend: $BACKEND"
 case "$BACKEND" in
   tpm)
-    log "TPM backend: /dev/tpmrm0 is passed into the control plane via deploy/docker-compose.tpm.yml"
-    [ -e /dev/tpmrm0 ] || die "HYPROXY_SECRETS_BACKEND=tpm but /dev/tpmrm0 is missing"
+    log "TPM backend: $HYPROXY_TPM_DEVICE is passed into the control plane via docker-compose.yml"
+    [ -e "$HYPROXY_TPM_DEVICE" ] || die "HYPROXY_SECRETS_BACKEND=tpm but $HYPROXY_TPM_DEVICE is missing"
     ;;
   file)
     warn "file backend keeps unsealed key material on disk; migrate to TPM before exposure."

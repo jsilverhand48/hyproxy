@@ -342,14 +342,15 @@ fi
 # lines with the canonical TPM block.
 sed -i -e '/^HYPROXY_SECRETS_BACKEND=/d' -e '/^HYPROXY_MASTER_KEY_FILE=/d' \
        -e '/^HYPROXY_TPM_SEALED_BLOB=/d' -e '/^HYPROXY_TPM_PCRS=/d' \
+       -e '/^HYPROXY_TPM_DEVICE=/d' \
        -e '/^TSS_GID=/d' -e '/^COMPOSE_FILE=/d' "$HYPROXY_INSTALL_DIR/.env"
 cat >> "$HYPROXY_INSTALL_DIR/.env" <<EOF
 HYPROXY_SECRETS_BACKEND=tpm
 HYPROXY_MASTER_KEY_FILE=/dev/null
 HYPROXY_TPM_SEALED_BLOB=$HYPROXY_TPM_SEALED_BLOB
 HYPROXY_TPM_PCRS=$HYPROXY_TPM_PCRS
+HYPROXY_TPM_DEVICE=/dev/tpmrm0
 TSS_GID=$TSS_GID
-COMPOSE_FILE=docker-compose.yml:deploy/docker-compose.tpm.yml
 EOF
 chown hyproxy:hyproxy "$HYPROXY_INSTALL_DIR/.env"
 chmod 600 "$HYPROXY_INSTALL_DIR/.env"
