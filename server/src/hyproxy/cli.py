@@ -99,6 +99,7 @@ def bootstrap_admin(email: str, display_name: str) -> None:
                 status="active",
                 auth_tier="admin",
                 password_hash=password_hash,
+                is_protected=True,
             )
         )
 

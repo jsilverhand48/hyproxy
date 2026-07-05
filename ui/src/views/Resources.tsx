@@ -3,12 +3,14 @@ import { api } from "../lib/api";
 import type { Resource } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
 import { AsyncBody, Banner, Section } from "../components/ui";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 
 const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh"];
 
 export function Resources() {
   const { data, error, loading, reload } = useResource<Resource[]>("/resources");
   const [msg, setMsg] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Resource | null>(null);
   const [form, setForm] = useState({ name: "", protocol: "https", public_host: "", host: "", ports: "" });
 
   async function create() {
@@ -127,7 +129,7 @@ export function Resources() {
                   <button className="link" onClick={() => toggle(r)}>
                     {r.enabled ? "Disable" : "Enable"}
                   </button>
-                  <button className="link danger" onClick={() => remove(r.id)}>
+                  <button className="link danger" onClick={() => setPendingDelete(r)}>
                     Delete
                   </button>
                 </td>
@@ -136,6 +138,19 @@ export function Resources() {
           </tbody>
         </table>
       </AsyncBody>
+      {pendingDelete !== null && (
+        <ConfirmDialog
+          title="Delete resource"
+          message={`Delete resource "${pendingDelete.name}"? Policies referencing it are affected.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void remove(pendingDelete.id);
+            setPendingDelete(null);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </Section>
   );
 }

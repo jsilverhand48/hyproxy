@@ -7,6 +7,7 @@ Do not:
 - Attempt to run the project
 - Configure the system to run the project
 - Commit any changes
+- read test files, or make assumptions based of test files
 
 
 ## Testing
@@ -22,3 +23,4 @@ Do not:
 - stop all processes using ./stop.sh
 - start staging using ./start-staging.sh
 - make changes on the remote host
+- mirror any changes you make in staging to the local project repo after the goal is achieved

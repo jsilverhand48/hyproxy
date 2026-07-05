@@ -3,12 +3,14 @@ import { api } from "../lib/api";
 import type { Policy, Resource, Role } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
 import { AsyncBody, Banner, Section } from "../components/ui";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 
 export function Policies() {
   const policies = useResource<Policy[]>("/policies");
   const roles = useResource<Role[]>("/roles");
   const resources = useResource<Resource[]>("/resources");
   const [msg, setMsg] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Policy | null>(null);
   const [form, setForm] = useState({ role_id: "", resource_id: "", action: "allow" });
 
   const roleName = (id: string) => roles.data?.find((r) => r.id === id)?.name ?? id;
@@ -95,7 +97,7 @@ export function Policies() {
                   <button className="link" onClick={() => toggle(p)}>
                     {p.enabled ? "Disable" : "Enable"}
                   </button>
-                  <button className="link danger" onClick={() => remove(p.id)}>
+                  <button className="link danger" onClick={() => setPendingDelete(p)}>
                     Delete
                   </button>
                 </td>
@@ -104,6 +106,19 @@ export function Policies() {
           </tbody>
         </table>
       </AsyncBody>
+      {pendingDelete !== null && (
+        <ConfirmDialog
+          title="Delete policy"
+          message={`Delete the "${roleName(pendingDelete.role_id)}" policy on "${resourceName(pendingDelete.resource_id)}"?`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void remove(pendingDelete.id);
+            setPendingDelete(null);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </Section>
   );
 }

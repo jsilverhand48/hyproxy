@@ -40,6 +40,7 @@ class AuthEventType(StrEnum):
     STEPUP_FAILURE = "stepup.failure"
     THROTTLE_APPLIED = "throttle.applied"
     ADMIN_TOTP_RESET = "admin.totp_reset"
+    ADMIN_PASSWORD_RESET = "admin.password_reset"
 
 
 # Only these keys may appear in detail; values must be short scalars.

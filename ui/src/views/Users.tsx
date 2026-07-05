@@ -1,8 +1,10 @@
 import { Fragment, useState } from "react";
 import { api } from "../lib/api";
+import { currentUserEmail } from "../lib/auth";
 import type { Role, User } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
 import { AsyncBody, Banner, Section } from "../components/ui";
+import { ConfirmDialog, Modal } from "../components/ConfirmDialog";
 
 // Inline role management for one user. The list endpoint returns role *names*
 // (list[str]); attach/detach are keyed by role *id*, so we map name -> id from
@@ -12,6 +14,7 @@ function RolePanel({ user, allRoles }: { user: User; allRoles: Role[] }) {
   const { data, error, loading, reload } = useResource<string[]>(`/users/${user.id}/roles`);
   const [msg, setMsg] = useState<string | null>(null);
   const [selected, setSelected] = useState("");
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
 
   const assigned = data ?? [];
   const assignable = allRoles.filter((r) => !assigned.includes(r.name));
@@ -43,7 +46,7 @@ function RolePanel({ user, allRoles }: { user: User; allRoles: Role[] }) {
               <button
                 className="link danger chip-x"
                 title="Remove role"
-                onClick={() => void unassign(name)}
+                onClick={() => setPendingRemove(name)}
               >
                 &times;
               </button>
@@ -64,6 +67,19 @@ function RolePanel({ user, allRoles }: { user: User; allRoles: Role[] }) {
           </button>
         </div>
       </AsyncBody>
+      {pendingRemove !== null && (
+        <ConfirmDialog
+          title="Remove role"
+          message={`Remove role "${pendingRemove}" from ${user.email}?`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={() => {
+            void unassign(pendingRemove);
+            setPendingRemove(null);
+          }}
+          onCancel={() => setPendingRemove(null)}
+        />
+      )}
     </div>
   );
 }
@@ -73,12 +89,19 @@ export function Users() {
   const roles = useResource<Role[]>("/roles");
   const [msg, setMsg] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<{ kind: "delete" | "reset-totp"; user: User } | null>(
+    null,
+  );
+  const [pwTarget, setPwTarget] = useState<User | null>(null);
+  const [newPw, setNewPw] = useState("");
   const [form, setForm] = useState({
     email: "",
     display_name: "",
     auth_tier: "standard",
     temp_password: "",
   });
+
+  const selfEmail = (currentUserEmail() ?? "").toLowerCase();
 
   async function create() {
     setMsg(await runMutation(() => api.post<User>("/users", form)));
@@ -93,6 +116,23 @@ export function Users() {
 
   async function setStatus(u: User, status: string) {
     setMsg(await runMutation(() => api.patch<User>(`/users/${u.id}`, { status })));
+    reload();
+  }
+
+  async function resetTotp(u: User) {
+    setMsg(
+      (await runMutation(() => api.post(`/users/${u.id}/reset-totp`))) ??
+        `2FA reset for ${u.email}; they re-enroll at next login.`,
+    );
+    reload();
+  }
+
+  async function resetPassword(u: User, tempPassword: string) {
+    setMsg(
+      (await runMutation(() =>
+        api.post(`/users/${u.id}/reset-password`, { temp_password: tempPassword }),
+      )) ?? `Password reset for ${u.email}; all their sessions were revoked.`,
+    );
     reload();
   }
 
@@ -162,18 +202,36 @@ export function Users() {
                     >
                       {openId === u.id ? "Hide roles" : "Roles"}
                     </button>
-                    {u.status === "active" ? (
-                      <button className="link" onClick={() => setStatus(u, "disabled")}>
-                        Disable
-                      </button>
-                    ) : (
-                      <button className="link" onClick={() => setStatus(u, "active")}>
-                        Enable
+                    {u.status === "active"
+                      ? !u.is_protected && (
+                          <button className="link" onClick={() => setStatus(u, "disabled")}>
+                            Disable
+                          </button>
+                        )
+                      : (
+                          <button className="link" onClick={() => setStatus(u, "active")}>
+                            Enable
+                          </button>
+                        )}
+                    <button className="link" onClick={() => setPwTarget(u)}>
+                      Reset password
+                    </button>
+                    {u.auth_tier === "standard" && (
+                      <button
+                        className="link"
+                        onClick={() => setConfirming({ kind: "reset-totp", user: u })}
+                      >
+                        Reset 2FA
                       </button>
                     )}
-                    <button className="link danger" onClick={() => remove(u.id)}>
-                      Delete
-                    </button>
+                    {!u.is_protected && u.email.toLowerCase() !== selfEmail && (
+                      <button
+                        className="link danger"
+                        onClick={() => setConfirming({ kind: "delete", user: u })}
+                      >
+                        Delete
+                      </button>
+                    )}
                   </td>
                 </tr>
                 {openId === u.id && (
@@ -192,6 +250,77 @@ export function Users() {
           </tbody>
         </table>
       </AsyncBody>
+
+      {confirming?.kind === "delete" && (
+        <ConfirmDialog
+          title="Delete user"
+          message={`Delete user ${confirming.user.email}? Their sessions are revoked and this cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void remove(confirming.user.id);
+            setConfirming(null);
+          }}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
+      {confirming?.kind === "reset-totp" && (
+        <ConfirmDialog
+          title="Reset 2FA"
+          message={`Reset 2FA for ${confirming.user.email}? Their authenticator and unused recovery codes are removed, sessions revoked, and they re-enroll at next login.`}
+          confirmLabel="Reset 2FA"
+          danger
+          onConfirm={() => {
+            void resetTotp(confirming.user);
+            setConfirming(null);
+          }}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
+      {pwTarget !== null && (
+        <Modal
+          title="Reset password"
+          onClose={() => {
+            setPwTarget(null);
+            setNewPw("");
+          }}
+        >
+          <p>
+            Set a new temporary password for {pwTarget.email}. All their sessions will be
+            revoked.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void resetPassword(pwTarget, newPw);
+              setPwTarget(null);
+              setNewPw("");
+            }}
+          >
+            <input
+              type="password"
+              placeholder="new temp password (>=12)"
+              value={newPw}
+              onChange={(e) => setNewPw(e.target.value)}
+              minLength={12}
+              required
+              autoFocus
+            />
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setPwTarget(null);
+                  setNewPw("");
+                }}
+              >
+                Cancel
+              </button>
+              <button type="submit">Reset password</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </Section>
   );
 }

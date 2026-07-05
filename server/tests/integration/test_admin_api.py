@@ -36,6 +36,7 @@ from hyproxy.db.models import (
     UserTotp,
 )
 from hyproxy.security import recovery as recovery_service
+from hyproxy.security.passwords import verify_password
 from hyproxy.security.webauthn import expected_origin
 
 pytestmark = pytest.mark.integration
@@ -452,3 +453,101 @@ async def test_create_and_delete_user(
     )
     assert deleted.status_code == 204
     assert await db.get(User, uuid.UUID(new_id)) is None
+
+
+async def test_protected_admin_guards(
+    admin_ctx: dict[str, Any],
+    admin_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+) -> None:
+    protected = await create_user(db, make_password_hash, tier="admin", password=PW, protected=True)
+    normal = await create_user(db, make_password_hash, tier="standard", password=PW)
+
+    deleted = await admin_call(
+        admin_client, admin_ctx["dpop"], admin_ctx["token"], "DELETE", f"/api/v1/users/{protected.id}"
+    )
+    assert deleted.status_code == 409
+    assert await db.get(User, protected.id) is not None
+
+    disabled = await admin_call(
+        admin_client,
+        admin_ctx["dpop"],
+        admin_ctx["token"],
+        "PATCH",
+        f"/api/v1/users/{protected.id}",
+        {"status": "disabled"},
+    )
+    assert disabled.status_code == 409
+
+    demoted = await admin_call(
+        admin_client,
+        admin_ctx["dpop"],
+        admin_ctx["token"],
+        "PATCH",
+        f"/api/v1/users/{protected.id}",
+        {"auth_tier": "standard"},
+    )
+    assert demoted.status_code == 409
+
+    got = await admin_call(
+        admin_client, admin_ctx["dpop"], admin_ctx["token"], "GET", f"/api/v1/users/{protected.id}"
+    )
+    assert got.status_code == 200 and got.json()["is_protected"] is True
+    got_normal = await admin_call(
+        admin_client, admin_ctx["dpop"], admin_ctx["token"], "GET", f"/api/v1/users/{normal.id}"
+    )
+    assert got_normal.status_code == 200 and got_normal.json()["is_protected"] is False
+
+
+async def test_admin_password_reset_flow(
+    admin_ctx: dict[str, Any],
+    admin_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+) -> None:
+    target = await create_user(db, make_password_hash, tier="standard", password=PW)
+    old_hash = target.password_hash
+
+    resp = await admin_call(
+        admin_client,
+        admin_ctx["dpop"],
+        admin_ctx["token"],
+        "POST",
+        f"/api/v1/users/{target.id}/reset-password",
+        {"temp_password": "new-temp-password-123"},
+    )
+    assert resp.status_code == 204, resp.text
+
+    await db.refresh(target)
+    assert target.password_hash != old_hash
+    assert verify_password(target.password_hash, "new-temp-password-123")
+    assert not verify_password(target.password_hash, PW)
+
+    events = [
+        e.event_type
+        for e in (await db.scalars(select(AuthEvent).where(AuthEvent.user_id == target.id))).all()
+    ]
+    assert "admin.password_reset" in events
+    changes = (
+        await db.scalars(select(PolicyChange).where(PolicyChange.entity_type == "password_reset"))
+    ).all()
+    assert len(changes) == 1
+
+
+async def test_password_reset_rejects_short_password(
+    admin_ctx: dict[str, Any],
+    admin_client: httpx.AsyncClient,
+    db: AsyncSession,
+    make_password_hash: HashFn,
+) -> None:
+    target = await create_user(db, make_password_hash, tier="standard", password=PW)
+    resp = await admin_call(
+        admin_client,
+        admin_ctx["dpop"],
+        admin_ctx["token"],
+        "POST",
+        f"/api/v1/users/{target.id}/reset-password",
+        {"temp_password": "too-short"},
+    )
+    assert resp.status_code == 422

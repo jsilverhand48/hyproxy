@@ -8,6 +8,7 @@ export interface User {
   display_name: string;
   status: string;
   auth_tier: string;
+  is_protected: boolean;
   created_at: string;
 }
 

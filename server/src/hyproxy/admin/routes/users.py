@@ -9,6 +9,7 @@ from hyproxy.admin.changes import record_change
 from hyproxy.admin.deps import AdminDep, DbDep, StepUpDep, client_ip
 from hyproxy.admin.schemas import (
     CredentialOut,
+    PasswordResetIn,
     SessionOut,
     UserCreate,
     UserOut,
@@ -114,6 +115,11 @@ async def patch_user(
 
     new_tier = body.auth_tier or user.auth_tier
     new_status = body.status or user.status
+    if user.is_protected and (new_status == "disabled" or new_tier != "admin"):
+        raise HTTPException(
+            status_code=409,
+            detail="the bootstrap admin cannot be disabled or demoted",
+        )
     # Invariant: promoting to admin tier requires two strong (non-break-glass)
     # authenticators already enrolled; otherwise password alone could take over.
     if new_tier == "admin" and user.auth_tier != "admin":
@@ -148,6 +154,8 @@ async def delete_user(user_id: uuid.UUID, request: Request, db: DbDep, authed: S
     user = await _get_user_or_404(db, user_id)
     if user.id == authed.user.id:
         raise HTTPException(status_code=409, detail="cannot delete yourself")
+    if user.is_protected:
+        raise HTTPException(status_code=409, detail="the bootstrap admin cannot be deleted")
     before = _user_snapshot(user)
     await _revoke_user_sessions(db, user.id, client_ip(request))
     await db.delete(user)
@@ -252,6 +260,40 @@ async def reset_totp(user_id: uuid.UUID, request: Request, db: DbDep, authed: St
     await emit(
         db,
         AuthEventType.ADMIN_TOTP_RESET,
+        source_ip=ip,
+        success=True,
+        user_id=user_id,
+        detail={"entity_id": str(user_id)},
+    )
+
+
+@router.post("/{user_id}/reset-password", status_code=204)
+async def reset_password(
+    user_id: uuid.UUID,
+    body: PasswordResetIn,
+    request: Request,
+    db: DbDep,
+    authed: StepUpDep,
+) -> None:
+    """Admin-assisted password reset: set a new temporary password and revoke
+    all sessions; the user signs in with the new password."""
+    user = await _get_user_or_404(db, user_id)
+    ip = client_ip(request)
+    user.password_hash = hash_password(body.temp_password)
+    user.updated_at = datetime.now(UTC)
+    await db.flush()
+    await _revoke_user_sessions(db, user_id, ip)
+    # No before/after snapshot: never record password material.
+    await record_change(
+        db,
+        actor_id=authed.user.id,
+        entity_type="password_reset",
+        entity_id=user_id,
+        action="update",
+    )
+    await emit(
+        db,
+        AuthEventType.ADMIN_PASSWORD_RESET,
         source_ip=ip,
         success=True,
         user_id=user_id,

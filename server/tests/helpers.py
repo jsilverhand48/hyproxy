@@ -88,6 +88,7 @@ async def create_user(
     tier: str,
     password: str,
     status: str = "active",
+    protected: bool = False,
 ) -> User:
     user = User(
         external_id=f"u-{uuid.uuid4()}",
@@ -96,6 +97,7 @@ async def create_user(
         status=status,
         auth_tier=tier,
         password_hash=make_password_hash(password),
+        is_protected=protected,
     )
     db.add(user)
     await db.flush()

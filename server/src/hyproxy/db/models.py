@@ -50,6 +50,8 @@ class User(Base):
     # First-class attribute deciding the second factor at login time; never derived from roles.
     auth_tier: Mapped[str] = mapped_column(Text)
     password_hash: Mapped[str] = mapped_column(Text)
+    # Bootstrap admin; cannot be deleted, disabled, or demoted.
+    is_protected: Mapped[bool] = mapped_column(server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(server_default=NOW)
     updated_at: Mapped[datetime] = mapped_column(server_default=NOW)
 

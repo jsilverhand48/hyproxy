@@ -33,9 +33,14 @@ class UserOut(BaseModel):
     display_name: str
     status: str
     auth_tier: str
+    is_protected: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PasswordResetIn(BaseModel):
+    temp_password: str = Field(min_length=12, max_length=128)
 
 
 class RoleCreate(BaseModel):

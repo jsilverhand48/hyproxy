@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import type { Role, User } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
 import { AsyncBody, Banner, Section } from "../components/ui";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 
 // Inline membership management for one role. The backend exposes the user-role
 // relationship only from the user side (GET/PUT/DELETE
@@ -17,6 +18,7 @@ function MemberPanel({ role, allUsers }: { role: Role; allUsers: User[] }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [selected, setSelected] = useState("");
   const [tick, setTick] = useState(0);
+  const [pendingRemove, setPendingRemove] = useState<User | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -67,7 +69,7 @@ function MemberPanel({ role, allUsers }: { role: Role; allUsers: User[] }) {
               <button
                 className="link danger chip-x"
                 title="Remove member"
-                onClick={() => void unassign(u.id)}
+                onClick={() => setPendingRemove(u)}
               >
                 &times;
               </button>
@@ -88,6 +90,19 @@ function MemberPanel({ role, allUsers }: { role: Role; allUsers: User[] }) {
           </button>
         </div>
       </AsyncBody>
+      {pendingRemove !== null && (
+        <ConfirmDialog
+          title="Remove member"
+          message={`Remove role "${role.name}" from ${pendingRemove.email}?`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={() => {
+            void unassign(pendingRemove.id);
+            setPendingRemove(null);
+          }}
+          onCancel={() => setPendingRemove(null)}
+        />
+      )}
     </div>
   );
 }
@@ -97,6 +112,7 @@ export function Roles() {
   const users = useResource<User[]>("/users");
   const [msg, setMsg] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Role | null>(null);
   const [form, setForm] = useState({ name: "", description: "" });
 
   async function create() {
@@ -160,7 +176,7 @@ export function Roles() {
                     >
                       {openId === r.id ? "Hide members" : "Members"}
                     </button>
-                    <button className="link danger" onClick={() => remove(r.id)}>
+                    <button className="link danger" onClick={() => setPendingDelete(r)}>
                       Delete
                     </button>
                   </td>
@@ -181,6 +197,19 @@ export function Roles() {
           </tbody>
         </table>
       </AsyncBody>
+      {pendingDelete !== null && (
+        <ConfirmDialog
+          title="Delete role"
+          message={`Delete role "${pendingDelete.name}"? Policies referencing it are affected.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            void remove(pendingDelete.id);
+            setPendingDelete(null);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </Section>
   );
 }
