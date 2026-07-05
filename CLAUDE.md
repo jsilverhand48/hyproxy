@@ -6,6 +6,7 @@ symbol-level edits (replace_symbol_body, rename_symbol) over full-file rewrites.
 Do not:
 - Attempt to run the project
 - Configure the system to run the project
+- Commit any changes
 
 
 ## Testing
@@ -14,3 +15,10 @@ Do not:
 - For any run likely to be verbose, redirect and read only the tail:
     pytest <args> > /tmp/pytest.log 2>&1; tail -n 30 /tmp/pytest.log
 - The mk-2 / key-rotation e2e tests are order-dependent and flaky. Ignore failures there. Do NOT investigate them or try to prove they are pre-existing.
+
+## Debugging
+- ssh into staging to parse logs and check whats wrong using "ssh hyproxy-dev" and then cd into ~/hyproxy
+- rebuild after any changes using ./build.sh --clean
+- stop all processes using ./stop.sh
+- start staging using ./start-staging.sh
+- make changes on the remote host

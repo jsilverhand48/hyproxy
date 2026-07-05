@@ -2,8 +2,10 @@
 {% block title %}Set up authenticator{% endblock %}
 {% block content %}
 <h1>Set up your authenticator</h1>
-<p>Add this account to your authenticator app, then confirm with a code.</p>
-<p>Setup key:</p>
+<p>Scan this QR code with your authenticator app (Google Authenticator, Duo, etc.),
+then confirm with a code.</p>
+<div class="qr">{{ qr_svg | safe }}</div>
+<p>Can't scan? Enter this setup key manually:</p>
 <code class="block">{{ secret }}</code>
 <p>Or use this link on the device with your authenticator:</p>
 <code class="block">{{ otpauth_uri }}</code>

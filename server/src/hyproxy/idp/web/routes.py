@@ -386,6 +386,7 @@ async def enroll_totp_form(request: Request, db: DbDep, flow: str | None = None)
             "csrf_token": csrf_token,
             "secret": secret,
             "otpauth_uri": uri,
+            "qr_svg": totp_service.provisioning_qr_svg(uri),
             "error": None,
         },
     )
@@ -429,6 +430,7 @@ async def enroll_totp_submit(
                 "csrf_token": new_csrf,
                 "secret": secret,
                 "otpauth_uri": uri,
+                "qr_svg": totp_service.provisioning_qr_svg(uri),
                 "error": "Incorrect code. Scan the secret and try again.",
             },
             status_code=401,

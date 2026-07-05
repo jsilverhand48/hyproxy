@@ -177,6 +177,10 @@ async def test_enrollment_flow_for_user_without_totp(
 
     secret = re.search(r'<code class="block">([A-Z2-7]+)</code>', enroll.text).group(1)  # type: ignore[union-attr]
 
+    # The page carries a scannable QR of the otpauth URI as inline SVG (an
+    # <img> would be blocked by the auth surface's img-src 'self' CSP).
+    assert '<div class="qr"><svg' in enroll.text.replace("\n", "")
+
     # Secret is stored encrypted, never in plaintext.
     row = await db.get(UserTotp, user.id)
     assert row is not None and row.confirmed_at is None

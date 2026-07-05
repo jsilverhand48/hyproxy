@@ -1,8 +1,10 @@
 """TOTP enrollment and verification. Secrets are AES-GCM encrypted at rest."""
 
+import io
 from datetime import datetime
 
 import pyotp
+import segno
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hyproxy.core.crypto import decrypt_blob, encrypt_blob
@@ -18,6 +20,21 @@ def generate_secret() -> str:
 
 def provisioning_uri(secret: str, email: str, issuer: str) -> str:
     return pyotp.TOTP(secret).provisioning_uri(name=email, issuer_name=issuer)
+
+
+def provisioning_qr_svg(uri: str) -> str:
+    """QR of the otpauth:// URI as an inline-SVG fragment (no XML declaration).
+
+    Inlined into the enrollment page rather than served as an <img>: the auth
+    surface's CSP has img-src 'self' with no data: source, and inline SVG
+    markup is not fetched, so no CSP widening is needed. omitsize yields a
+    viewBox-only SVG the stylesheet can scale.
+    """
+    buf = io.BytesIO()
+    segno.make(uri, error="m").save(
+        buf, kind="svg", xmldecl=False, omitsize=True, dark="#000", light="#fff", border=3
+    )
+    return buf.getvalue().decode("utf-8")
 
 
 def verify_code(secret: str, code: str, at: datetime | None = None) -> bool:

@@ -9,3 +9,5 @@ button { margin-top: 1.5rem; width: 100%; padding: .6rem; }
 .error { color: #b3261e; }
 code.block { display: block; padding: .75rem; background: #f6f6f6; margin: .5rem 0;
              word-break: break-all; }
+.qr { width: 12rem; max-width: 100%; margin: .5rem auto; }
+.qr svg { display: block; width: 100%; height: auto; }
