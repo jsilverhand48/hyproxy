@@ -32,9 +32,9 @@
 
 set -eu
 
-REPO_URL="${HYPROXY_REPO_URL:-https://github.com/jsilverhand48/hyproxy.git}"
-REPO_BRANCH="${HYPROXY_REPO_BRANCH:-main}"
-INSTALL_DIR="${HYPROXY_INSTALL_DIR:-/opt/hyproxy}"
+: "${HYPROXY_REPO_URL:=https://github.com/jsilverhand48/hyproxy.git}"
+: "${HYPROXY_REPO_BRANCH:=master}"
+: "${HYPROXY_INSTALL_DIR:=/opt/hyproxy}"
 LAUNCH_DIR="$(pwd)"
 
 c_info() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -94,7 +94,7 @@ have git  || dnf install -y git
 have curl || dnf install -y curl
 
 # --- 1. Gather configuration -------------------------------------------------
-# A complete pre-existing .env (previous run in $INSTALL_DIR, or one prepared
+# A complete pre-existing .env (previous run in $HYPROXY_INSTALL_DIR, or one prepared
 # in the launch directory) is reused verbatim and skips every prompt.
 REQUIRED_VARS="HYPROXY_DOMAIN POSTGRES_PASSWORD ADMIN_EMAIL ADMIN_NAME ACME_EMAIL LEGO_DNS_PROVIDER"
 
@@ -111,8 +111,8 @@ env_missing() (  # env_missing FILE: print the required vars FILE does not set
 
 REUSE_ENV=no
 ENV_SRC=""
-for _cand in "$INSTALL_DIR/.env" "$LAUNCH_DIR/.env"; do
-  [ "$_cand" = "$LAUNCH_DIR/.env" ] && [ "$LAUNCH_DIR" = "$INSTALL_DIR" ] && continue
+for _cand in "$HYPROXY_INSTALL_DIR/.env" "$LAUNCH_DIR/.env"; do
+  [ "$_cand" = "$LAUNCH_DIR/.env" ] && [ "$LAUNCH_DIR" = "$HYPROXY_INSTALL_DIR" ] && continue
   [ -f "$_cand" ] || continue
   # A syntax error in the candidate aborts the subshell; treat as unusable.
   _miss="$(env_missing "$_cand")" || _miss=" (unparseable)"
@@ -123,21 +123,22 @@ done
 if [ "$REUSE_ENV" = yes ]; then
   c_info "reusing configuration from $ENV_SRC (skipping all prompts)"
   set -a; . "$ENV_SRC"; set +a
-  DOMAIN="$HYPROXY_DOMAIN"
-  ISSUER="${HYPROXY_ISSUER:-https://idp.$HYPROXY_DOMAIN}"
-  ADMIN_ORIGIN="${HYPROXY_ADMIN_UI_ORIGIN:-https://admin.$HYPROXY_DOMAIN}"
-  case "${HYPROXY_ENABLE_GUAC:-no}" in [Yy]*|1|true) ENABLE_GUAC=yes ;; *) ENABLE_GUAC=no ;; esac
+  : "${HYPROXY_ISSUER:=https://idp.$HYPROXY_DOMAIN}"
+  : "${HYPROXY_ADMIN_UI_ORIGIN:=https://admin.$HYPROXY_DOMAIN}"
+  case "${HYPROXY_ENABLE_GUAC:-no}" in [Yy]*|1|true) HYPROXY_ENABLE_GUAC=yes ;; *) HYPROXY_ENABLE_GUAC=no ;; esac
   PROVIDER_CREDS=""
   printf '  Domain:       %s\n' "$HYPROXY_DOMAIN"
   printf '  Admin:        %s <%s>\n' "$ADMIN_NAME" "$ADMIN_EMAIL"
   printf '  DNS provider: %s\n' "$LEGO_DNS_PROVIDER"
-  printf '  Guac bridge:  %s\n' "$ENABLE_GUAC"
+  printf '  Guac bridge:  %s\n' "$HYPROXY_ENABLE_GUAC"
 else
 
-[ "$HAVE_TTY" = yes ] || c_die "no terminal for prompts and no complete .env found (checked $INSTALL_DIR/.env and $LAUNCH_DIR/.env)"
+[ "$HAVE_TTY" = yes ] || c_die "no terminal for prompts and no complete .env found (checked $HYPROXY_INSTALL_DIR/.env and $LAUNCH_DIR/.env)"
 c_info "configuration (press Enter to accept a [default])"
-prompt DOMAIN "Base domain (public, e.g. example.com)"
+prompt HYPROXY_DOMAIN "Base domain (public, e.g. example.com)"
 [ -n "$HYPROXY_DOMAIN" ] || c_die "a base domain is required"
+: "${HYPROXY_ISSUER:=https://idp.$HYPROXY_DOMAIN}"
+: "${HYPROXY_ADMIN_UI_ORIGIN:=https://admin.$HYPROXY_DOMAIN}"
 prompt ADMIN_EMAIL "Admin + ACME email" "admin@$HYPROXY_DOMAIN"
 prompt ADMIN_NAME  "Admin display name" "Admin"
 prompt LEGO_DNS_PROVIDER "lego DNS-01 provider code (e.g. godaddy, cloudflare, route53)"
@@ -157,19 +158,19 @@ while : ; do
     *) c_warn "ignoring '$_line' (not VAR=VALUE)" ;;
   esac
 done
-[ -n "$PROVIDER_CREDS" ] || c_warn "no credentials entered; add them to $INSTALL_DIR/.env before the cert can issue"
+[ -n "$PROVIDER_CREDS" ] || c_warn "no credentials entered; add them to $HYPROXY_INSTALL_DIR/.env before the cert can issue"
 
 prompt_yn GENPW "Auto-generate a strong POSTGRES_PASSWORD?" Y
 if [ "$GENPW" = yes ]; then POSTGRES_PASSWORD="$(genpass)"; else prompt_secret POSTGRES_PASSWORD "POSTGRES_PASSWORD"; fi
 [ -n "$POSTGRES_PASSWORD" ] || c_die "POSTGRES_PASSWORD cannot be empty"
 
-prompt_yn ENABLE_GUAC "Enable the Guacamole remote-desktop bridge?" N
+prompt_yn HYPROXY_ENABLE_GUAC "Enable the Guacamole remote-desktop bridge?" N
 
 
 c_info "review"
 {
-  printf '  Install dir:     %s\n' "$INSTALL_DIR"
-  printf '  Repo:            %s (%s)\n' "$REPO_URL" "$REPO_BRANCH"
+  printf '  Install dir:     %s\n' "$HYPROXY_INSTALL_DIR"
+  printf '  Repo:            %s (%s)\n' "$HYPROXY_REPO_URL" "$HYPROXY_REPO_BRANCH"
   printf '  Domain:          %s\n' "$HYPROXY_DOMAIN"
   printf '  Issuer:          %s\n' "$HYPROXY_ISSUER"
   printf '  Admin origin:    %s\n' "$HYPROXY_ADMIN_UI_ORIGIN"
@@ -177,7 +178,7 @@ c_info "review"
   printf '  DNS provider:    %s\n' "$LEGO_DNS_PROVIDER"
   printf '  Service user:    hyproxy (system account, nologin)\n'
   printf '  Postgres pw:     (hidden)\n'
-  printf '  Guac bridge:     %s\n' "$ENABLE_GUAC"
+  printf '  Guac bridge:     %s\n' "$HYPROXY_ENABLE_GUAC"
   printf '  Secrets backend: file (migrate to TPM later; docs/production-checklist.md)\n'
 } >"$TTY"
 prompt_yn GO "Proceed with installation?" Y
@@ -186,16 +187,16 @@ prompt_yn GO "Proceed with installation?" Y
 fi  # REUSE_ENV
 
 # --- 2. Clone or update the repo ---------------------------------------------
-c_info "fetching the repository into $INSTALL_DIR"
-if [ -d "$INSTALL_DIR/.git" ]; then
-  git -C "$INSTALL_DIR" fetch --depth 1 origin "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" checkout -q "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" reset --hard "origin/$REPO_BRANCH"
+c_info "fetching the repository into $HYPROXY_INSTALL_DIR"
+if [ -d "$HYPROXY_INSTALL_DIR/.git" ]; then
+  git -C "$HYPROXY_INSTALL_DIR" fetch --depth 1 origin "$HYPROXY_REPO_BRANCH"
+  git -C "$HYPROXY_INSTALL_DIR" checkout -q "$HYPROXY_REPO_BRANCH"
+  git -C "$HYPROXY_INSTALL_DIR" reset --hard "origin/$HYPROXY_REPO_BRANCH"
 else
-  mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+  mkdir -p "$(dirname "$HYPROXY_INSTALL_DIR")"
+  git clone --branch "$HYPROXY_REPO_BRANCH" --depth 1 "$HYPROXY_REPO_URL" "$HYPROXY_INSTALL_DIR"
 fi
-cd "$INSTALL_DIR"
+cd "$HYPROXY_INSTALL_DIR"
 
 # --- 3. Service account --------------------------------------------------------
 # The whole stack (compose containers, the data plane, cert renewal) runs as
@@ -203,33 +204,33 @@ cd "$INSTALL_DIR"
 c_info "creating the 'hyproxy' service account (owns and runs the stack)"
 getent group hyproxy  >/dev/null 2>&1 || groupadd --system hyproxy
 getent passwd hyproxy >/dev/null 2>&1 || \
-  useradd --system --gid hyproxy --home-dir "$INSTALL_DIR" --no-create-home \
+  useradd --system --gid hyproxy --home-dir "$HYPROXY_INSTALL_DIR" --no-create-home \
           --shell /sbin/nologin hyproxy
-chown -R hyproxy:hyproxy "$INSTALL_DIR"
+chown -R hyproxy:hyproxy "$HYPROXY_INSTALL_DIR"
 
 # --- 4. Write config files -----------------------------------------------------
-MASTER_KEY_FILE="${HYPROXY_MASTER_KEY_FILE:-$INSTALL_DIR/server/.dev/master.keys}"
+: "${HYPROXY_MASTER_KEY_FILE:=$HYPROXY_INSTALL_DIR/server/.dev/master.keys}"
 umask 077
 if [ "$REUSE_ENV" = yes ]; then
-  if [ "$ENV_SRC" = "$INSTALL_DIR/.env" ]; then
-    c_info "keeping the existing $INSTALL_DIR/.env"
+  if [ "$ENV_SRC" = "$HYPROXY_INSTALL_DIR/.env" ]; then
+    c_info "keeping the existing $HYPROXY_INSTALL_DIR/.env"
   else
-    c_info "installing $ENV_SRC as $INSTALL_DIR/.env"
-    cp "$ENV_SRC" "$INSTALL_DIR/.env"
+    c_info "installing $ENV_SRC as $HYPROXY_INSTALL_DIR/.env"
+    cp "$ENV_SRC" "$HYPROXY_INSTALL_DIR/.env"
   fi
 else
-c_info "writing $INSTALL_DIR/.env (the single config/secrets file)"
-cat > "$INSTALL_DIR/.env" <<EOF
+c_info "writing $HYPROXY_INSTALL_DIR/.env (the single config/secrets file)"
+cat > "$HYPROXY_INSTALL_DIR/.env" <<EOF
 # Generated by install.sh on $(date -u +%FT%TZ). Production values.
 HYPROXY_DOMAIN=$HYPROXY_DOMAIN
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 HYPROXY_ISSUER=$HYPROXY_ISSUER
 HYPROXY_ADMIN_UI_ORIGIN=$HYPROXY_ADMIN_UI_ORIGIN
 HYPROXY_SECRETS_BACKEND=file
-HYPROXY_MASTER_KEY_FILE=$MASTER_KEY_FILE
+HYPROXY_MASTER_KEY_FILE=$HYPROXY_MASTER_KEY_FILE
 ADMIN_EMAIL=$ADMIN_EMAIL
 ADMIN_NAME=$ADMIN_NAME
-HYPROXY_ENABLE_GUAC=$ENABLE_GUAC
+HYPROXY_ENABLE_GUAC=$HYPROXY_ENABLE_GUAC
 DP_TLS_CERT=/etc/hyproxy/certs/fullchain.pem
 DP_TLS_KEY=/etc/hyproxy/certs/privkey.pem
 DP_LISTEN=:443
@@ -242,10 +243,10 @@ LEGO_PATH=/etc/hyproxy/lego
 EOF
 # Appended with printf, not the heredoc above, so tokens containing $ or
 # backquotes land in the file literally.
-printf '%s' "$PROVIDER_CREDS" >> "$INSTALL_DIR/.env"
+printf '%s' "$PROVIDER_CREDS" >> "$HYPROXY_INSTALL_DIR/.env"
 fi
-chown hyproxy:hyproxy "$INSTALL_DIR/.env"
-chmod 600 "$INSTALL_DIR/.env"
+chown hyproxy:hyproxy "$HYPROXY_INSTALL_DIR/.env"
+chmod 600 "$HYPROXY_INSTALL_DIR/.env"
 
 c_info "preparing /etc/hyproxy (lego state + cert install dirs)"
 install -d -m 0755 /etc/hyproxy
@@ -260,7 +261,7 @@ c_warn "SAVE the admin one-time password printed below; it is shown only once."
 SKIP_GATES=1; [ "${HYPROXY_RUN_GATES:-0}" = "1" ] && SKIP_GATES=0
 HYPROXY_ASSUME_YES=1 SKIP_GATES="$SKIP_GATES" \
   ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_NAME="$ADMIN_NAME" \
-  bash "$INSTALL_DIR/bootstrap.sh"
+  bash "$HYPROXY_INSTALL_DIR/bootstrap.sh"
 
 # From here on the service account drives docker compose. runuser does a fresh
 # initgroups, so the new membership applies immediately, no re-login needed.
@@ -268,16 +269,16 @@ getent group docker >/dev/null 2>&1 || c_die "docker group not found after boots
 usermod -aG docker hyproxy
 
 # Optional guac cipher key, minted now that images exist.
-if [ "$ENABLE_GUAC" = yes ]; then
+if [ "$HYPROXY_ENABLE_GUAC" = yes ]; then
   c_info "minting a Guacamole cipher key"
   GKEY="$(runuser -u hyproxy -- docker compose run --rm cli gen-guac-key 2>/dev/null | tr -d '\r' | tail -n1)"
-  if [ -n "$GKEY" ]; then printf 'HYPROXY_GUAC_CYPHER_KEY=%s\n' "$GKEY" >> "$INSTALL_DIR/.env"
+  if [ -n "$GKEY" ]; then printf 'HYPROXY_GUAC_CYPHER_KEY=%s\n' "$GKEY" >> "$HYPROXY_INSTALL_DIR/.env"
   else c_warn "could not mint a guac key; set HYPROXY_GUAC_CYPHER_KEY in .env by hand"; fi
 fi
 
 # File secrets backend bridge: the container user (uid 10001) must read the
 # mounted master key. TPM is the real fix (docs/production-checklist.md).
-[ -f "$MASTER_KEY_FILE" ] && chmod 0644 "$MASTER_KEY_FILE"
+[ -f "$HYPROXY_MASTER_KEY_FILE" ] && chmod 0644 "$HYPROXY_MASTER_KEY_FILE"
 
 # --- 6. Render the data-plane config -----------------------------------------
 # The data plane is the single LAN TLS ingress. idp and admin are proxied with
@@ -285,8 +286,9 @@ fi
 # DB-driven and hot-loaded from the control plane, so only the infra routes are
 # rendered here. Static routes win on host conflict.
 c_info "rendering dataplane/config.json"
-set -a; . "$INSTALL_DIR/.env"; set +a
-DP_OUT="${DP_OUT:-$INSTALL_DIR/dataplane/config.json}"
+set -a; . "$HYPROXY_INSTALL_DIR/.env"; set +a
+case "${HYPROXY_ENABLE_GUAC:-no}" in [Yy]*|1|true) HYPROXY_ENABLE_GUAC=yes ;; *) HYPROXY_ENABLE_GUAC=no ;; esac
+DP_OUT="${DP_OUT:-$HYPROXY_INSTALL_DIR/dataplane/config.json}"
 IDP_BACKEND="${IDP_BACKEND:-http://127.0.0.1:8300}"
 ADMIN_BACKEND="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
 AUTHZ_BACKEND="${AUTHZ_BACKEND:-http://127.0.0.1:8500}"
@@ -318,7 +320,7 @@ echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/auth.$HYPROXY_DOMAIN)"
 
 # bootstrap.sh and the render above ran as root; re-own so the service
 # account can read everything it runs (including the 0600 config.json).
-chown -R hyproxy:hyproxy "$INSTALL_DIR"
+chown -R hyproxy:hyproxy "$HYPROXY_INSTALL_DIR"
 
 # --- 7. TLS certificate (Let's Encrypt via DNS-01) ---------------------------
 # The issue/renew script is embedded here and written to /usr/local/sbin so the
@@ -408,7 +410,7 @@ OBTAIN_CERT
 chmod 0755 "$CERT_SCRIPT"
 
 c_info "issuing the real Let's Encrypt wildcard cert (as the hyproxy user)"
-runuser -u hyproxy -- env ACME_ENV_FILE="$INSTALL_DIR/.env" "$CERT_SCRIPT" \
+runuser -u hyproxy -- env ACME_ENV_FILE="$HYPROXY_INSTALL_DIR/.env" "$CERT_SCRIPT" \
   || c_die "ACME issuance failed (see output above)"
 
 # --- 8. SELinux, systemd units ------------------------------------------------
@@ -417,7 +419,7 @@ c_info "installing the systemd units"
 # The cert script needs no fcontext: /usr/local/sbin is bin_t by default.
 if have getenforce && [ "$(getenforce)" != "Disabled" ]; then
   have semanage || dnf install -y policycoreutils-python-utils
-  f="$INSTALL_DIR/dataplane/bin/dataplane"
+  f="$HYPROXY_INSTALL_DIR/dataplane/bin/dataplane"
   semanage fcontext -a -t bin_t "$f" 2>/dev/null || semanage fcontext -m -t bin_t "$f"
   restorecon -v "$f"
 fi
@@ -435,8 +437,8 @@ Requires=docker.service
 [Service]
 User=hyproxy
 Group=hyproxy
-WorkingDirectory=$INSTALL_DIR/dataplane
-ExecStart=$INSTALL_DIR/dataplane/bin/dataplane -config config.json
+WorkingDirectory=$HYPROXY_INSTALL_DIR/dataplane
+ExecStart=$HYPROXY_INSTALL_DIR/dataplane/bin/dataplane -config config.json
 Restart=on-failure
 RestartSec=2
 # Bind :443 without full root.
@@ -463,7 +465,7 @@ Wants=network-online.target
 Type=oneshot
 User=hyproxy
 Group=hyproxy
-EnvironmentFile=$INSTALL_DIR/.env
+EnvironmentFile=$HYPROXY_INSTALL_DIR/.env
 ExecStart=$CERT_SCRIPT
 EOF
 
@@ -490,7 +492,7 @@ systemctl daemon-reload
 # --- 9. Start the stack ------------------------------------------------------
 c_info "starting the control plane (containers, as the hyproxy user)"
 PROFILES="--profile app"
-[ "$ENABLE_GUAC" = yes ] && PROFILES="$PROFILES --profile guac"
+[ "$HYPROXY_ENABLE_GUAC" = yes ] && PROFILES="$PROFILES --profile guac"
 # shellcheck disable=SC2086
 runuser -u hyproxy -- docker compose $PROFILES up -d --wait
 
@@ -503,12 +505,12 @@ IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 c_info "installation complete"
 cat <<EOF
 
-hyproxy is installed at $INSTALL_DIR and running.
+hyproxy is installed at $HYPROXY_INSTALL_DIR and running.
 
   Public ingress : :443 (data plane, systemd 'hyproxy-dataplane')
   Control plane  : idp/admin/authz containers on 127.0.0.1
   Cert renewal   : hyproxy-acme.timer (daily, runs as 'hyproxy')
-  Service user   : 'hyproxy' (nologin; owns $INSTALL_DIR and runs the stack)
+  Service user   : 'hyproxy' (nologin; owns $HYPROXY_INSTALL_DIR and runs the stack)
 
 NEXT STEPS (not automated):
   1. Public DNS: point idp.$HYPROXY_DOMAIN, admin.$HYPROXY_DOMAIN, auth.$HYPROXY_DOMAIN (and each app
@@ -521,7 +523,7 @@ NEXT STEPS (not automated):
      off-box logging, and the security review.
 
 SECURITY NOTES:
-  - $INSTALL_DIR/.env (0600, hyproxy-owned) holds ALL secrets: the Postgres
+  - $HYPROXY_INSTALL_DIR/.env (0600, hyproxy-owned) holds ALL secrets: the Postgres
     password and the DNS provider API credentials. Guard it and any backups.
   - The 'hyproxy' account is in the 'docker' group, which is root-equivalent
     on most hosts; treat a compromise of that account as a host compromise.
