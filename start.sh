@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# start-staging.sh: start hyproxy end to end for the LAN-only STAGING VM.
+# start.sh: start hyproxy end to end.
 #
 # Staging reuses the production topology (docs/staging.md, docs/deployment.md):
 #   - Containerized: Postgres + control plane (idp/admin/authz) [+ guac bridge],
@@ -53,7 +53,7 @@ if [ ! -f "$ENV_FILE" ]; then
     cp "$ROOT/.env.staging.example" "$ENV_FILE"
     warn "seeded repo-root .env from .env.staging.example."
   fi
-  die "edit .env with your STAGING_DOMAIN, HYPROXY_ISSUER, HYPROXY_ADMIN_UI_ORIGIN, and POSTGRES_PASSWORD, then re-run."
+  die "edit .env with your HYPROXY_DOMAIN, HYPROXY_ISSUER, HYPROXY_ADMIN_UI_ORIGIN, and POSTGRES_PASSWORD, then re-run."
 fi
 set -a
 # shellcheck disable=SC1090
@@ -67,18 +67,18 @@ case "$HYPROXY_ISSUER" in
   https://*) : ;;
   *) die "HYPROXY_ISSUER must be https:// for staging (got: $HYPROXY_ISSUER)" ;;
 esac
-: "${STAGING_DOMAIN:?STAGING_DOMAIN must be set in .env for staging}"
+: "${HYPROXY_DOMAIN:?HYPROXY_DOMAIN must be set in .env for staging}"
 case "$HYPROXY_ISSUER" in
-  *example.com*) die "HYPROXY_ISSUER still points at example.com; set your real STAGING_DOMAIN hosts in .env" ;;
+  *example.com*) die "HYPROXY_ISSUER still points at example.com; set your real HYPROXY_DOMAIN hosts in .env" ;;
 esac
 
-# Gateway topology: derive from STAGING_DOMAIN unless the operator set it in .env.
+# Gateway topology: derive from HYPROXY_DOMAIN unless the operator set it in .env.
 # These reach the control-plane containers (docker-compose server-env) so the authz
 # service and the cli agree on gateway_redirect_uri(); the cookie domain is the
 # parent so the gateway session is shared across the auth host and app hosts.
-export HYPROXY_AUTH_HOST="${HYPROXY_AUTH_HOST:-auth.$STAGING_DOMAIN}"
+export HYPROXY_AUTH_HOST="${HYPROXY_AUTH_HOST:-auth.$HYPROXY_DOMAIN}"
 export HYPROXY_EXTERNAL_SCHEME="${HYPROXY_EXTERNAL_SCHEME:-https}"
-export HYPROXY_GATEWAY_COOKIE_DOMAIN="${HYPROXY_GATEWAY_COOKIE_DOMAIN:-$STAGING_DOMAIN}"
+export HYPROXY_GATEWAY_COOKIE_DOMAIN="${HYPROXY_GATEWAY_COOKIE_DOMAIN:-$HYPROXY_DOMAIN}"
 log "gateway auth host: $HYPROXY_EXTERNAL_SCHEME://$HYPROXY_AUTH_HOST (cookie domain: $HYPROXY_GATEWAY_COOKIE_DOMAIN)"
 [ "${POSTGRES_PASSWORD:-change-me-strong}" = "change-me-strong" ] && \
   warn "POSTGRES_PASSWORD is the staging example default; set a real password in .env"
@@ -199,13 +199,13 @@ cat <<EOF
 
 $(printf '\033[1;32mhyproxy staging is up.\033[0m')
 
-  IdP         https://idp.$STAGING_DOMAIN            (issuer: $HYPROXY_ISSUER)
-  Admin UI    ${HYPROXY_ADMIN_UI_ORIGIN:-https://admin.$STAGING_DOMAIN}   (LAN only; OIDC + DPoP + step-up enforced)
-  Auth host   https://auth.$STAGING_DOMAIN           (gateway / guac broker)
+  IdP         https://idp.$HYPROXY_DOMAIN            (issuer: $HYPROXY_ISSUER)
+  Admin UI    ${HYPROXY_ADMIN_UI_ORIGIN:-https://admin.$HYPROXY_DOMAIN}   (LAN only; OIDC + DPoP + step-up enforced)
+  Auth host   https://auth.$HYPROXY_DOMAIN           (gateway / guac broker)
   Data plane  baremetal on ${DP_LISTEN:-:443}, Host-routed from dataplane/config.json
   Guac bridge ${HYPROXY_GUAC_CYPHER_KEY:+enabled (tunnel + guacd)}${HYPROXY_GUAC_CYPHER_KEY:-disabled}
 
-Point idp./admin./auth.$STAGING_DOMAIN at this VM's LAN IP (LAN DNS or /etc/hosts).
+Point idp./admin./auth.$HYPROXY_DOMAIN at this VM's LAN IP (LAN DNS or /etc/hosts).
 Container logs:  docker compose ${PROFILES[*]} logs -f
 The data plane runs in the foreground here; Ctrl-C stops it and the containers.
 For persistence, install deploy/systemd/hyproxy-dataplane.service instead (docs/staging.md).

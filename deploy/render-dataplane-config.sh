@@ -17,7 +17,7 @@
 # and no config edit. Static routes here still work and win on host conflict.
 #
 # Required:
-#   STAGING_DOMAIN     base domain; hosts are idp./admin./auth.<domain>
+#   HYPROXY_DOMAIN     base domain; hosts are idp./admin./auth.<domain>
 # Optional:
 #   DP_TLS_CERT        cert path (default /etc/hyproxy/certs/fullchain.pem)
 #   DP_TLS_KEY         key path  (default /etc/hyproxy/certs/privkey.pem)
@@ -31,7 +31,7 @@
 
 set -euo pipefail
 
-: "${STAGING_DOMAIN:?set STAGING_DOMAIN (e.g. staging.example.com)}"
+: "${HYPROXY_DOMAIN:?set HYPROXY_DOMAIN (e.g. staging.example.com)}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DP_TLS_CERT="${DP_TLS_CERT:-/etc/hyproxy/certs/fullchain.pem}"
@@ -54,17 +54,17 @@ cat > "$DP_OUT" <<JSON
   "tls_cert": "$DP_TLS_CERT",
   "tls_key": "$DP_TLS_KEY",
   "authz_url": "$AUTHZ_BACKEND",
-  "auth_host": "auth.$STAGING_DOMAIN",
+  "auth_host": "auth.$HYPROXY_DOMAIN",
   "auth_backend": "$AUTHZ_BACKEND",
   "gateway_cookie_name": "__Secure-gw",
   "guac_backend": "$GUAC_BACKEND",
   "routes_refresh_secs": $ROUTES_REFRESH_SECS,
   "upstream_insecure_skip_verify": $UPSTREAM_INSECURE,
   "routes": {
-    "idp.$STAGING_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
-    "admin.$STAGING_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
+    "idp.$HYPROXY_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
+    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
   }
 }
 JSON
 
-echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/auth.$STAGING_DOMAIN)"
+echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/auth.$HYPROXY_DOMAIN)"

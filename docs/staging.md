@@ -22,14 +22,14 @@ no-forward-auth route while the admin app keeps enforcing OIDC + DPoP + step-up.
 
 ## Hostnames
 
-All under one base domain `STAGING_DOMAIN` (wildcard cert `*.STAGING_DOMAIN`):
+All under one base domain `HYPROXY_DOMAIN` (wildcard cert `*.HYPROXY_DOMAIN`):
 
 | Host                    | Serves                         | Data-plane route |
 |-------------------------|--------------------------------|------------------|
-| `idp.STAGING_DOMAIN`    | OIDC IdP (issuer)              | `auth:false` -> `127.0.0.1:8300` |
-| `admin.STAGING_DOMAIN`  | Admin API + served SPA        | `auth:false` -> `127.0.0.1:8400` |
-| `auth.STAGING_DOMAIN`   | Gateway / guac broker         | auth_host -> `127.0.0.1:8500` |
-| `<app>.STAGING_DOMAIN`  | Protected app backends        | forward-authed |
+| `idp.HYPROXY_DOMAIN`    | OIDC IdP (issuer)              | `auth:false` -> `127.0.0.1:8300` |
+| `admin.HYPROXY_DOMAIN`  | Admin API + served SPA        | `auth:false` -> `127.0.0.1:8400` |
+| `auth.HYPROXY_DOMAIN`   | Gateway / guac broker         | auth_host -> `127.0.0.1:8500` |
+| `<app>.HYPROXY_DOMAIN`  | Protected app backends        | forward-authed |
 
 Point these at the VM's **LAN IP** via your LAN DNS (split-horizon) or each
 client's `/etc/hosts`. DNS-01 makes the cert valid regardless of the A record.
@@ -38,14 +38,14 @@ client's `/etc/hosts`. DNS-01 makes the cert valid regardless of the A record.
 
 1. **Config files.** From the repo root:
    ```sh
-   cp .env.staging.example .env            # then edit: STAGING_DOMAIN, HYPROXY_ISSUER,
+   cp .env.staging.example .env            # then edit: HYPROXY_DOMAIN, HYPROXY_ISSUER,
                                            # HYPROXY_ADMIN_UI_ORIGIN, POSTGRES_PASSWORD
    ```
    Create the DNS-provider secret file (root-owned, 0600). For GoDaddy:
    ```sh
    sudo install -d -m 0700 /etc/hyproxy
    sudo tee /etc/hyproxy/acme.env >/dev/null <<'EOF'
-   STAGING_DOMAIN=friskiemar.com
+   HYPROXY_DOMAIN=friskiemar.com
    ACME_EMAIL=you@friskiemar.com
    LEGO_DNS_PROVIDER=godaddy
    GODADDY_API_KEY=<key from https://developer.godaddy.com/keys>
@@ -106,15 +106,15 @@ sudo systemctl daemon-reload && sudo systemctl enable --now hyproxy-dataplane
 
 From a LAN browser:
 
-1. `https://idp.STAGING_DOMAIN/auth/login` — sign in as the admin with the
+1. `https://idp.HYPROXY_DOMAIN/auth/login` — sign in as the admin with the
    one-time password printed by `bootstrap-prod.sh`.
 2. Enroll **two** passkeys at `/auth/enroll/webauthn` (admin tier requires two).
-3. Use the admin UI at `https://admin.STAGING_DOMAIN`.
+3. Use the admin UI at `https://admin.HYPROXY_DOMAIN`.
 
 ## Verify
 
-- `curl https://idp.STAGING_DOMAIN/.well-known/openid-configuration` → 200,
-  valid LE chain, `issuer == https://idp.STAGING_DOMAIN`.
+- `curl https://idp.HYPROXY_DOMAIN/.well-known/openid-configuration` → 200,
+  valid LE chain, `issuer == https://idp.HYPROXY_DOMAIN`.
 - Unknown Host → `421 Misdirected Request` from the data plane.
 - Admin UI loads, OIDC login (PKCE + DPoP) completes, a mutation triggers the
   WebAuthn step-up redirect.

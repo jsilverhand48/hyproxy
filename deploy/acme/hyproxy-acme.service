@@ -3,7 +3,7 @@
 #
 # Install: copy to /etc/systemd/system/, adjust paths, then
 #   systemctl daemon-reload && systemctl enable --now hyproxy-acme.timer
-# Provider creds + STAGING_DOMAIN/ACME_EMAIL/LEGO_DNS_PROVIDER live in
+# Provider creds + HYPROXY_DOMAIN/ACME_EMAIL/LEGO_DNS_PROVIDER live in
 # /etc/hyproxy/acme.env (root-owned, 0600).
 [Unit]
 Description=hyproxy ACME wildcard cert issuance/renewal (lego DNS-01)

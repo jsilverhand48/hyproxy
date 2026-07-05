@@ -14,7 +14,7 @@
 #
 # Configuration (put secrets in an env file OUTSIDE the repo, default
 # /etc/hyproxy/acme.env, and reference it via ACME_ENV_FILE):
-#   STAGING_DOMAIN          base domain; cert covers *.<domain> and <domain>
+#   HYPROXY_DOMAIN          base domain; cert covers *.<domain> and <domain>
 #   ACME_EMAIL              registration/expiry-notice email
 #   LEGO_DNS_PROVIDER       lego DNS provider code (e.g. cloudflare, route53)
 #   <provider creds>        provider-specific env vars (e.g. CLOUDFLARE_DNS_API_TOKEN)
@@ -29,7 +29,7 @@ if [ -f "$ACME_ENV_FILE" ]; then
   set -a; . "$ACME_ENV_FILE"; set +a
 fi
 
-: "${STAGING_DOMAIN:?set STAGING_DOMAIN}"
+: "${HYPROXY_DOMAIN:?set HYPROXY_DOMAIN}"
 : "${ACME_EMAIL:?set ACME_EMAIL}"
 : "${LEGO_DNS_PROVIDER:?set LEGO_DNS_PROVIDER (lego provider code, e.g. cloudflare)}"
 command -v lego >/dev/null || { echo "lego not found (install from https://go-acme.github.io/lego/)" >&2; exit 1; }
@@ -42,21 +42,21 @@ server_args=()
 [ "${ACME_STAGING:-0}" = "1" ] && server_args=(--server https://acme-staging-v02.api.letsencrypt.org/directory)
 
 common=(--accept-tos --email "$ACME_EMAIL" --dns "$LEGO_DNS_PROVIDER"
-        --domains "*.$STAGING_DOMAIN" --domains "$STAGING_DOMAIN"
+        --domains "*.$HYPROXY_DOMAIN" --domains "$HYPROXY_DOMAIN"
         --path "$LEGO_PATH" "${server_args[@]}")
 
 mode="${1:-auto}"
 # lego stores the wildcard cert under a sanitized name: *. -> _.
-crt="$LEGO_PATH/certificates/_.$STAGING_DOMAIN.crt"
-key="$LEGO_PATH/certificates/_.$STAGING_DOMAIN.key"
+crt="$LEGO_PATH/certificates/_.$HYPROXY_DOMAIN.crt"
+key="$LEGO_PATH/certificates/_.$HYPROXY_DOMAIN.key"
 
 # lego v5 folds get + renew into a single `run` command, and all these flags are
 # subcommand-scoped, so they must follow `run` (v4 accepted them before it).
 if { [ "$mode" = "auto" ] && [ ! -f "$crt" ]; }; then
-  echo "==> issuing wildcard cert for *.$STAGING_DOMAIN via DNS-01 ($LEGO_DNS_PROVIDER)"
+  echo "==> issuing wildcard cert for *.$HYPROXY_DOMAIN via DNS-01 ($LEGO_DNS_PROVIDER)"
   lego run "${common[@]}"
 else
-  echo "==> renewing (if within 30 days) *.$STAGING_DOMAIN"
+  echo "==> renewing (if within 30 days) *.$HYPROXY_DOMAIN"
   lego run "${common[@]}" --renew-days 30 || true
 fi
 
