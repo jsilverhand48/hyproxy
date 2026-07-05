@@ -60,6 +60,12 @@ set -a
 . "$ENV_FILE"
 set +a
 
+# TPM secrets backend: layer the device-passthrough overlay onto every compose
+# invocation (the explicit -f above bypasses any COMPOSE_FILE in .env).
+if [ "${HYPROXY_SECRETS_BACKEND:-file}" = "tpm" ]; then
+  COMPOSE+=(-f "$ROOT/deploy/docker-compose.tpm.yml")
+fi
+
 # --- 2. Reject dev configuration (fail closed) -------------------------------
 log "preflight: staging config values"
 : "${HYPROXY_ISSUER:?HYPROXY_ISSUER must be set in .env}"
@@ -127,7 +133,7 @@ case "$BACKEND" in
       "master key file for the file backend (compose mounts it as a secret)"
     ;;
   tpm)
-    warn "TPM backend selected; verify the TPM device is passed through to the containers."
+    need_file "/dev/tpmrm0" "TPM device (passed through via deploy/docker-compose.tpm.yml)"
     ;;
   *) die "unknown HYPROXY_SECRETS_BACKEND=$BACKEND" ;;
 esac

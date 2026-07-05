@@ -165,6 +165,12 @@ set -a
 . "$ENV_FILE"
 set +a
 
+# TPM secrets backend: layer the device-passthrough overlay onto every compose
+# invocation here (the explicit -f above bypasses any COMPOSE_FILE in .env).
+if [ "${HYPROXY_SECRETS_BACKEND:-file}" = "tpm" ]; then
+  COMPOSE+=(-f "$ROOT/deploy/docker-compose.tpm.yml")
+fi
+
 log "preflight: required configuration"
 require_var HYPROXY_ISSUER
 require_var HYPROXY_ADMIN_UI_ORIGIN
@@ -185,8 +191,8 @@ BACKEND="${HYPROXY_SECRETS_BACKEND:-file}"
 log "secrets backend: $BACKEND"
 case "$BACKEND" in
   tpm)
-    warn "TPM backend: containers need the TPM device passed through or the control"
-    warn "plane must run on baremetal. See docs/deployment.md before relying on it."
+    log "TPM backend: /dev/tpmrm0 is passed into the control plane via deploy/docker-compose.tpm.yml"
+    [ -e /dev/tpmrm0 ] || die "HYPROXY_SECRETS_BACKEND=tpm but /dev/tpmrm0 is missing"
     ;;
   file)
     warn "file backend keeps unsealed key material on disk; migrate to TPM before exposure."

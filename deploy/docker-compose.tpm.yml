@@ -1,0 +1,30 @@
+# TPM secrets-backend overlay. Activate by listing it after the base file in
+# COMPOSE_FILE (install.sh writes this into .env on TPM installs):
+#
+#   COMPOSE_FILE=docker-compose.yml:deploy/docker-compose.tpm.yml
+#
+# It passes the host TPM resource-manager device into every control-plane
+# service that needs the master key, so tpm_unseal (core/secrets.py) can run
+# tpm2_unseal inside the container. The container user (uid 10001) is not in
+# the host 'tss' group that owns /dev/tpmrm0, so the numeric gid is granted
+# via group_add; install.sh resolves it into TSS_GID in .env.
+#
+# The base file's master_key compose secret still resolves; point
+# HYPROXY_MASTER_KEY_FILE at /dev/null in .env so no key file is required
+# (invariant: no unsealed master-key material on disk in production).
+
+x-tpm: &tpm
+  devices:
+    - /dev/tpmrm0:/dev/tpmrm0
+  group_add:
+    - "${TSS_GID:?set TSS_GID to the gid of the host 'tss' group}"
+  environment:
+    HYPROXY_TPM_SEALED_BLOB: ${HYPROXY_TPM_SEALED_BLOB:?set to the persistent handle of the sealed master key}
+    HYPROXY_TPM_PCRS: ${HYPROXY_TPM_PCRS:-sha256:0,2,4,7}
+
+services:
+  migrate: *tpm
+  cli: *tpm
+  idp: *tpm
+  admin: *tpm
+  authz: *tpm

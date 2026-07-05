@@ -33,6 +33,13 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app/server
 
+# tpm2-tools backs the TPM secrets backend (core/secrets.py tpm_unseal shells
+# out to tpm2_unseal). The device itself is passed through by compose only in
+# TPM deployments (deploy/docker-compose.tpm.yml); harmless otherwise.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tpm2-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencies first for layer caching. --no-dev drops the test/lint toolchain.
 COPY server/pyproject.toml server/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project

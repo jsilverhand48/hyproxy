@@ -23,8 +23,15 @@ The work is in three parts:
   `rotate-master-key`) re-wraps every sealed blob to the current key.
   Integration-tested end to end.
 
-The single missing piece is `tpm_unseal()` in `core/secrets.py:88`, which today
-raises `NotImplementedError`. It does not yet read `tpm_sealed_blob`.
+All of this is now implemented: `tpm_unseal()` shells out to `tpm2_unseal`
+against the persistent handle in `HYPROXY_TPM_SEALED_BLOB` under the PCR
+policy in `HYPROXY_TPM_PCRS` (default `sha256:0,2,4,7`), the server image
+includes tpm2-tools, and `deploy/docker-compose.tpm.yml` passes the TPM device
+into the control-plane services. `install.sh` automates Parts 2-4 end to end
+for production installs (seal at install time, one-time plaintext printout for
+the FIPS backup device, migration off a pre-existing file key, rotation, and
+destruction of the on-disk key). The parts below remain as the manual
+procedure and as reference for resealing after PCR-changing updates.
 
 ## Part 1: implement `tpm_unseal()`
 
@@ -137,7 +144,7 @@ single transaction.
 ```sh
 # 1. Switch the backend to TPM and restart the stack.
 #    HYPROXY_SECRETS_BACKEND=tpm  (env / .env)
-./start-prod.sh
+./start.sh
 
 # 2. Re-wrap all sealed blobs (TOTP secrets, signing keys, connection secrets)
 #    to the new current key.

@@ -15,6 +15,9 @@
 # credentials, and a few options. Either way it then:
 #   - clones the repo into $HYPROXY_INSTALL_DIR (default /opt/hyproxy),
 #   - creates the 'hyproxy' service account that owns and runs the stack,
+#   - generates the master key and seals it into the TPM 2.0 under a PCR
+#     policy; the plaintext is printed EXACTLY ONCE so it can be copied to a
+#     FIPS backup device, and never touches disk,
 #   - writes a single service-account-owned .env (0600) with everything the
 #     stack needs, including the ACME DNS-01 provider credentials,
 #   - runs bootstrap.sh (installs deps, opens the firewall, builds images,
@@ -23,9 +26,15 @@
 #   - installs and enables the systemd units (data plane + renewal timer),
 #   - brings up the control plane and starts the data plane.
 #
-# It deliberately does NOT do: the TPM secrets backend (a code task), WireGuard
-# admin access, your public DNS records, or the final security review. Those
-# remain manual; see docs/production-checklist.md.
+# A TPM 2.0 (/dev/tpmrm0) is REQUIRED: production installs always use the TPM
+# secrets backend; the on-disk 'file' backend is dev-only and never used here.
+# If a previous install used the file backend, its key is folded into the
+# sealed blob, all sealed data is re-wrapped to a fresh key, and the on-disk
+# key file is destroyed.
+#
+# It deliberately does NOT do: WireGuard admin access, your public DNS records,
+# or the final security review. Those remain manual; see
+# docs/production-checklist.md.
 #
 # Overridable via environment:
 #   HYPROXY_REPO_URL, HYPROXY_REPO_BRANCH, HYPROXY_INSTALL_DIR, HYPROXY_RUN_GATES
@@ -92,6 +101,12 @@ case " $ids " in
 esac
 have git  || dnf install -y git
 have curl || dnf install -y curl
+have openssl || dnf install -y openssl
+
+# TPM 2.0 is mandatory: the master key is sealed to hardware, never kept on disk.
+[ -e /dev/tpmrm0 ] || c_die "no TPM 2.0 resource manager at /dev/tpmrm0; production installs require a TPM"
+have tpm2_unseal || dnf install -y tpm2-tools
+tpm2_pcrread sha256:0 >/dev/null 2>&1 || c_die "TPM present but tpm2_pcrread failed (check /dev/tpmrm0)"
 
 # --- 1. Gather configuration -------------------------------------------------
 # A complete pre-existing .env (previous run in $HYPROXY_INSTALL_DIR, or one prepared
@@ -179,7 +194,7 @@ c_info "review"
   printf '  Service user:    hyproxy (system account, nologin)\n'
   printf '  Postgres pw:     (hidden)\n'
   printf '  Guac bridge:     %s\n' "$HYPROXY_ENABLE_GUAC"
-  printf '  Secrets backend: file (migrate to TPM later; docs/production-checklist.md)\n'
+  printf '  Secrets backend: tpm (key sealed to TPM 2.0; plaintext shown ONCE for FIPS backup)\n'
 } >"$TTY"
 prompt_yn GO "Proceed with installation?" Y
 [ "$GO" = yes ] || c_die "aborted"
@@ -208,9 +223,85 @@ getent passwd hyproxy >/dev/null 2>&1 || \
           --shell /sbin/nologin hyproxy
 chown -R hyproxy:hyproxy "$HYPROXY_INSTALL_DIR"
 
-# --- 4. Write config files -----------------------------------------------------
-: "${HYPROXY_MASTER_KEY_FILE:=$HYPROXY_INSTALL_DIR/server/.dev/master.keys}"
+# --- 4. Master key: generate, seal into the TPM, print once -------------------
+# The master key lives ONLY inside the TPM (sealed under a PCR policy) and on
+# the FIPS backup device it is copied to when printed below. No plaintext on
+# disk, ever: the sealing scratch space is tmpfs and shredded, and the compose
+# master_key secret is pointed at /dev/null.
 umask 077
+: "${HYPROXY_TPM_SEALED_BLOB:=0x81010001}"
+: "${HYPROXY_TPM_PCRS:=sha256:0,2,4,7}"
+TSS_GID="$(getent group tss | cut -d: -f3)"
+[ -n "$TSS_GID" ] || c_die "host group 'tss' not found (tpm2-tools should have provided it)"
+
+# A previous file-backend install is migrated: its key lines are folded into
+# the sealed blob so existing ciphertext still decrypts, a fresh key is added
+# as current, and once the stack is up everything is re-wrapped to it and the
+# old key file destroyed (section 9).
+OLD_KEY_FILE=""
+case "${HYPROXY_MASTER_KEY_FILE:-}" in ""|/dev/null) ;; *)
+  [ -f "$HYPROXY_MASTER_KEY_FILE" ] && OLD_KEY_FILE="$HYPROXY_MASTER_KEY_FILE" ;;
+esac
+if [ -z "$OLD_KEY_FILE" ] && [ "${HYPROXY_SECRETS_BACKEND:-file}" != tpm ] \
+   && [ -f "$HYPROXY_INSTALL_DIR/server/.dev/master.keys" ]; then
+  OLD_KEY_FILE="$HYPROXY_INSTALL_DIR/server/.dev/master.keys"
+fi
+
+if [ "$REUSE_ENV" = yes ] && [ "${HYPROXY_SECRETS_BACKEND:-}" = tpm ] && [ -z "$OLD_KEY_FILE" ] \
+   && tpm2_readpublic -c "$HYPROXY_TPM_SEALED_BLOB" >/dev/null 2>&1; then
+  c_info "master key already sealed in the TPM at $HYPROXY_TPM_SEALED_BLOB (keeping it)"
+else
+  c_info "sealing the master key into the TPM (handle $HYPROXY_TPM_SEALED_BLOB, policy $HYPROXY_TPM_PCRS)"
+  SEAL_DIR="$(mktemp -d /dev/shm/hyproxy-seal.XXXXXX)"   # tmpfs: never hits disk
+  PLAIN="$SEAL_DIR/master.keys"
+  : > "$PLAIN"
+  _n=1
+  if [ -n "$OLD_KEY_FILE" ]; then
+    c_info "folding existing file-backend key(s) from $OLD_KEY_FILE into the blob"
+    grep -v '^[[:space:]]*#' "$OLD_KEY_FILE" | grep . >> "$PLAIN" \
+      || c_die "no key lines found in $OLD_KEY_FILE"
+    _n=$(($(grep -c . "$PLAIN") + 1))
+    while grep -q "^mk-$_n:" "$PLAIN"; do _n=$((_n + 1)); done
+  fi
+  printf 'mk-%s:%s\n' "$_n" "$(openssl rand -base64 32)" >> "$PLAIN"
+
+  tpm2_createprimary -C o -g sha256 -G ecc -c "$SEAL_DIR/primary.ctx" >/dev/null
+  tpm2_startauthsession -S "$SEAL_DIR/session.dat"
+  tpm2_policypcr -S "$SEAL_DIR/session.dat" -l "$HYPROXY_TPM_PCRS" -L "$SEAL_DIR/pcr.policy" >/dev/null
+  tpm2_flushcontext "$SEAL_DIR/session.dat"
+  tpm2_create -C "$SEAL_DIR/primary.ctx" -g sha256 \
+      -u "$SEAL_DIR/sealed.pub" -r "$SEAL_DIR/sealed.priv" \
+      -L "$SEAL_DIR/pcr.policy" -i "$PLAIN" >/dev/null
+  tpm2_load -C "$SEAL_DIR/primary.ctx" -u "$SEAL_DIR/sealed.pub" -r "$SEAL_DIR/sealed.priv" \
+      -c "$SEAL_DIR/sealed.ctx" >/dev/null
+  # Free the handle if a stale object holds it, then persist the new one.
+  tpm2_evictcontrol -C o -c "$HYPROXY_TPM_SEALED_BLOB" >/dev/null 2>&1 || true
+  tpm2_evictcontrol -C o -c "$SEAL_DIR/sealed.ctx" "$HYPROXY_TPM_SEALED_BLOB" >/dev/null
+
+  # Round-trip through the TPM before anything depends on the blob (and
+  # before the one and only printout).
+  [ "$(tpm2_unseal -c "$HYPROXY_TPM_SEALED_BLOB" -p "pcr:$HYPROXY_TPM_PCRS")" = "$(cat "$PLAIN")" ] \
+    || c_die "TPM unseal round-trip verification failed; not proceeding"
+
+  cat <<KEYOUT
+
+  ================ MASTER KEY: COPY TO YOUR FIPS DEVICE NOW =================
+  This is the complete master-key payload just sealed into the TPM. It is
+  printed exactly this once and stored nowhere else. If the TPM or its PCR
+  state is lost, this backup is the only way to recover encrypted data.
+
+$(sed 's/^/      /' "$PLAIN")
+  ===========================================================================
+
+KEYOUT
+  shred -u "$PLAIN" "$SEAL_DIR/sealed.priv" "$SEAL_DIR/sealed.pub" 2>/dev/null || rm -f "$PLAIN"
+  rm -rf "$SEAL_DIR"
+fi
+
+# --- 4b. Write config files ----------------------------------------------------
+# The compose master_key secret must still resolve to a file; /dev/null keeps
+# it defined and empty (the TPM backend never reads it).
+HYPROXY_MASTER_KEY_FILE=/dev/null
 if [ "$REUSE_ENV" = yes ]; then
   if [ "$ENV_SRC" = "$HYPROXY_INSTALL_DIR/.env" ]; then
     c_info "keeping the existing $HYPROXY_INSTALL_DIR/.env"
@@ -226,8 +317,8 @@ HYPROXY_DOMAIN=$HYPROXY_DOMAIN
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 HYPROXY_ISSUER=$HYPROXY_ISSUER
 HYPROXY_ADMIN_UI_ORIGIN=$HYPROXY_ADMIN_UI_ORIGIN
-HYPROXY_SECRETS_BACKEND=file
-HYPROXY_MASTER_KEY_FILE=$HYPROXY_MASTER_KEY_FILE
+# Secrets backend lines (HYPROXY_SECRETS_BACKEND etc.) are appended below,
+# outside this heredoc, so fresh and reused .env files get the same block.
 ADMIN_EMAIL=$ADMIN_EMAIL
 ADMIN_NAME=$ADMIN_NAME
 HYPROXY_ENABLE_GUAC=$HYPROXY_ENABLE_GUAC
@@ -245,6 +336,21 @@ EOF
 # backquotes land in the file literally.
 printf '%s' "$PROVIDER_CREDS" >> "$HYPROXY_INSTALL_DIR/.env"
 fi
+
+# Enforce the TPM backend in the .env whatever its origin (a reused pre-TPM
+# .env still says HYPROXY_SECRETS_BACKEND=file): replace the secrets-backend
+# lines with the canonical TPM block.
+sed -i -e '/^HYPROXY_SECRETS_BACKEND=/d' -e '/^HYPROXY_MASTER_KEY_FILE=/d' \
+       -e '/^HYPROXY_TPM_SEALED_BLOB=/d' -e '/^HYPROXY_TPM_PCRS=/d' \
+       -e '/^TSS_GID=/d' -e '/^COMPOSE_FILE=/d' "$HYPROXY_INSTALL_DIR/.env"
+cat >> "$HYPROXY_INSTALL_DIR/.env" <<EOF
+HYPROXY_SECRETS_BACKEND=tpm
+HYPROXY_MASTER_KEY_FILE=/dev/null
+HYPROXY_TPM_SEALED_BLOB=$HYPROXY_TPM_SEALED_BLOB
+HYPROXY_TPM_PCRS=$HYPROXY_TPM_PCRS
+TSS_GID=$TSS_GID
+COMPOSE_FILE=docker-compose.yml:deploy/docker-compose.tpm.yml
+EOF
 chown hyproxy:hyproxy "$HYPROXY_INSTALL_DIR/.env"
 chmod 600 "$HYPROXY_INSTALL_DIR/.env"
 
@@ -275,10 +381,6 @@ if [ "$HYPROXY_ENABLE_GUAC" = yes ]; then
   if [ -n "$GKEY" ]; then printf 'HYPROXY_GUAC_CYPHER_KEY=%s\n' "$GKEY" >> "$HYPROXY_INSTALL_DIR/.env"
   else c_warn "could not mint a guac key; set HYPROXY_GUAC_CYPHER_KEY in .env by hand"; fi
 fi
-
-# File secrets backend bridge: the container user (uid 10001) must read the
-# mounted master key. TPM is the real fix (docs/production-checklist.md).
-[ -f "$HYPROXY_MASTER_KEY_FILE" ] && chmod 0644 "$HYPROXY_MASTER_KEY_FILE"
 
 # --- 6. Render the data-plane config -----------------------------------------
 # The data plane is the single LAN TLS ingress. idp and admin are proxied with
@@ -496,6 +598,17 @@ PROFILES="--profile app"
 # shellcheck disable=SC2086
 runuser -u hyproxy -- docker compose $PROFILES up -d --wait
 
+# File-backend migration epilogue: with the stack up on the TPM backend (old
+# key still in the blob), re-wrap every sealed secret to the new current key,
+# then destroy the on-disk key. Invariant: no unsealed master-key material on
+# disk in production.
+if [ -n "$OLD_KEY_FILE" ]; then
+  c_info "re-wrapping all sealed secrets to the new TPM master key"
+  runuser -u hyproxy -- docker compose run --rm cli rotate-master-key
+  c_info "destroying the on-disk file master key ($OLD_KEY_FILE)"
+  shred -u "$OLD_KEY_FILE"
+fi
+
 c_info "enabling + starting the data plane and renewal timer"
 systemctl enable --now hyproxy-dataplane
 systemctl enable --now hyproxy-acme.timer
@@ -519,14 +632,17 @@ NEXT STEPS (not automated):
      one-time password printed by bootstrap above; enroll two passkeys at
      /auth/enroll/webauthn.
   3. Work through docs/production-checklist.md before internet exposure:
-     TPM secrets backend, WireGuard admin access, backend TLS verification,
-     off-box logging, and the security review.
+     WireGuard admin access, backend TLS verification, off-box logging, and
+     the security review.
 
 SECURITY NOTES:
   - $HYPROXY_INSTALL_DIR/.env (0600, hyproxy-owned) holds ALL secrets: the Postgres
     password and the DNS provider API credentials. Guard it and any backups.
   - The 'hyproxy' account is in the 'docker' group, which is root-equivalent
     on most hosts; treat a compromise of that account as a host compromise.
-  - Under the 'file' secrets backend the master key sits on disk (readable by
-    the container). This is a bridge; migrate to TPM before exposure.
+  - The master key is sealed in the TPM (handle in HYPROXY_TPM_SEALED_BLOB)
+    under PCR policy HYPROXY_TPM_PCRS; nothing unsealed is on disk. Keep the
+    one-time printout on the FIPS device only. A firmware/kernel update that
+    changes the bound PCRs makes unsealing fail closed; reseal per
+    docs/TPM_STEPS.md before rebooting into such an update.
 EOF

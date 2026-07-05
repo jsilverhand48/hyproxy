@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Path to the TPM-sealed master-key blob (used only when secrets_backend=tpm;
     # unsealed via tpm2-tools at startup). See docs/production.md.
     tpm_sealed_blob: str = ""
+    # PCR selection the blob was sealed under. MUST match sealing time exactly
+    # (tpm2_unseal re-satisfies the policy with it); see docs/TPM_STEPS.md.
+    tpm_pcrs: str = "sha256:0,2,4,7"
 
     @field_validator("db_url")
     @classmethod

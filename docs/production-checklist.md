@@ -70,13 +70,17 @@ systemctl list-timers hyproxy-acme.timer                    # scheduled
       only. Adjust `dataplane/config.json` so the admin host is not fronted
       publicly, then restart the data plane.
 
-### Secrets backend (the one real code task)
-- [ ] Migrate off the file backend to TPM (`docs/production.md` section 1):
-      implement `core/secrets.tpm_unseal` (currently raises `NotImplementedError`),
-      seal a master key to the TPM, add it and `rotate-master-key`, switch
-      `HYPROXY_SECRETS_BACKEND=tpm`, then destroy the on-disk key. The file
-      backend that install.sh configures keeps the master key on disk and is a
-      bridge only.
+### Secrets backend
+- [x] TPM secrets backend (`docs/production.md` section 1): `core/secrets.tpm_unseal`
+      is implemented (shells out to `tpm2_unseal`), and install.sh now requires a
+      TPM 2.0, seals the master key at install time (printing it once for the FIPS
+      backup device), sets `HYPROXY_SECRETS_BACKEND=tpm`, and destroys any on-disk
+      key left by an earlier file-backend install after `rotate-master-key`.
+- [ ] Confirm the one-time master-key printout is stored on the FIPS device and
+      nowhere else; verify no `master.keys` file remains on disk.
+- [ ] Document/plan resealing before firmware or kernel updates that change the
+      bound PCRs (`HYPROXY_TPM_PCRS`); unsealing fails closed after such a change
+      (`docs/TPM_STEPS.md`).
 
 ### Backend and backchannel TLS
 - [ ] Enforce backend TLS verification (no skip-verify); trust or pin an internal

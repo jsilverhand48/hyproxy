@@ -88,15 +88,42 @@ class TpmSecretsBackend(_MapBackend):
 def tpm_unseal() -> str:
     """Unseal the master-key blob from the TPM (production only).
 
-    Deployment-specific: unseal `HYPROXY_TPM_SEALED_BLOB` under the configured
-    PCR policy via tpm2-tools (`tpm2_unseal`) or tpm2-pytss, returning the
-    `key_id:base64` text. Not implemented in-repo because it requires a TPM,
-    which the dev machine lacks; wire it at deploy time.
+    Runs `tpm2_unseal` against the persistent handle in
+    `HYPROXY_TPM_SEALED_BLOB`, re-satisfying the PCR policy the object was
+    sealed under (`HYPROXY_TPM_PCRS`; MUST match the sealing-time selection).
+    Returns the same `key_id:base64` text the file backend parses. Fails
+    closed: a missing handle, tool failure, or empty output raises so the
+    process refuses to start rather than run without keys.
     """
-    raise NotImplementedError(
-        "TPM unseal is a deployment integration point; see docs/security-notes.md "
-        "(Phase 5) and provide tpm2_unseal wiring"
-    )
+    import subprocess
+
+    settings = get_settings()
+    blob = settings.tpm_sealed_blob
+    if not blob:
+        raise RuntimeError(
+            "HYPROXY_TPM_SEALED_BLOB is empty; set it to the persistent handle "
+            "of the TPM-sealed master key (e.g. 0x81010001)"
+        )
+    try:
+        out = subprocess.run(
+            ["tpm2_unseal", "-c", blob, "-p", f"pcr:{settings.tpm_pcrs}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "tpm2_unseal not found; install tpm2-tools in the runtime environment"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"tpm2_unseal failed for handle {blob} under pcr:{settings.tpm_pcrs} "
+            f"(PCR state drift after a firmware/kernel update requires resealing; "
+            f"see docs/TPM_STEPS.md): {exc.stderr.strip()}"
+        ) from exc
+    if not out.stdout.strip():
+        raise RuntimeError("tpm2_unseal returned an empty payload")
+    return out.stdout
 
 
 def generate_master_key_file(path: Path) -> str:

@@ -74,6 +74,12 @@ set -a
 . "$ENV_FILE"
 set +a
 
+# TPM secrets backend: layer the device-passthrough overlay onto every compose
+# invocation (the explicit -f above bypasses any COMPOSE_FILE in .env).
+if [ "${HYPROXY_SECRETS_BACKEND:-file}" = "tpm" ]; then
+  COMPOSE+=(-f "$ROOT/deploy/docker-compose.tpm.yml")
+fi
+
 log "preflight: config values"
 : "${HYPROXY_ISSUER:?HYPROXY_ISSUER must be set in .env}"
 case "$HYPROXY_ISSUER" in
@@ -84,8 +90,12 @@ case "$HYPROXY_ISSUER" in
   *example.com*|*localhost*) die "HYPROXY_ISSUER is still a placeholder ($HYPROXY_ISSUER); set your real host in .env" ;;
 esac
 
-MASTER_KEY_FILE="${HYPROXY_MASTER_KEY_FILE:-$ROOT/server/.dev/master.keys}"
-[ -f "$MASTER_KEY_FILE" ] || die "master key not found at $MASTER_KEY_FILE (run bootstrap-prod.sh / cli bootstrap-keys first)."
+# The file backend needs a real key file; the TPM backend keeps the key in the
+# TPM (the compose master_key secret points at /dev/null and is never read).
+if [ "${HYPROXY_SECRETS_BACKEND:-file}" != "tpm" ]; then
+  MASTER_KEY_FILE="${HYPROXY_MASTER_KEY_FILE:-$ROOT/server/.dev/master.keys}"
+  [ -f "$MASTER_KEY_FILE" ] || die "master key not found at $MASTER_KEY_FILE (run bootstrap-prod.sh / cli bootstrap-keys first)."
+fi
 
 # guac is a container too: include it only when its key is set, so its image is
 # built and its inputs (tunnel/) count toward the control-plane build hash.
