@@ -79,9 +79,10 @@ ${LAN_CIDRS_LINE}
   "lan_only_redirect": "https://idp.$HYPROXY_DOMAIN/auth/login",
   "routes": {
     "idp.$HYPROXY_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
-    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false, "lan_only": true }
+    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false, "lan_only": true },
+    "apps.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
   }
 }
 JSON
 
-echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/auth.$HYPROXY_DOMAIN)"
+echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/auth/apps.$HYPROXY_DOMAIN)"

@@ -141,6 +141,7 @@ compute_image_hash() {
     # Build args are baked into the image, so a change must invalidate the cache.
     printf 'arg VITE_IDP_ISSUER=%s\n' "${HYPROXY_ISSUER:-}"
     printf 'arg VITE_ADMIN_UI_CLIENT_ID=%s\n' "${VITE_ADMIN_UI_CLIENT_ID:-admin-ui}"
+    printf 'arg VITE_PORTAL_HOST=%s\n' "${VITE_PORTAL_HOST:-}"
   } | sha256sum | awk '{print $1}'
 }
 

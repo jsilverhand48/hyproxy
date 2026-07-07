@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('submitted_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('error', sa.Text(), nullable=True),
-        sa.CheckConstraint("target IN ('alpha','bravo')", name='download_requests_target_check'),
+        sa.CheckConstraint("target IN ('shows','movies')", name='download_requests_target_check'),
         sa.CheckConstraint("status IN ('pending','approved','denied')", name='download_requests_status_check'),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['reviewed_by'], ['users.id'], ondelete='SET NULL'),

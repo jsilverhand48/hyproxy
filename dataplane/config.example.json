@@ -19,7 +19,7 @@
       "auth": false,
       "lan_only": true
     },
-    "apps.example.com": {
+    "apps.localhost": {
       "backend": "http://127.0.0.1:8400",
       "auth": false
     }

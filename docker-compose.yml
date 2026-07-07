@@ -27,6 +27,9 @@ x-server-build: &server-build
   args:
     VITE_IDP_ISSUER: ${HYPROXY_ISSUER:-https://idp.localhost:8300}
     VITE_ADMIN_UI_CLIENT_ID: ${VITE_ADMIN_UI_CLIENT_ID:-admin-ui}
+    # Portal host (apps.<domain>): the SPA switches to portal-only sections on
+    # this host. Empty keeps the single-host admin behavior.
+    VITE_PORTAL_HOST: ${VITE_PORTAL_HOST:-}
 
 # Shared control-plane environment. Env vars take precedence over any baked
 # config, so these pin the containerized topology (service-name DB host, etc.).
@@ -49,6 +52,15 @@ x-server-env: &server-env
   # lan_only edge block). The container cannot see the host's interfaces, so
   # the LAN subnet(s) must be spelled out. Empty disables the check.
   HYPROXY_ADMIN_LAN_CIDRS: ${HYPROXY_ADMIN_LAN_CIDRS:-}
+  # Standard-user portal origin (apps.<domain>): DPoP htu selection in the
+  # admin app, IdP CORS, and step-up return validation. Empty disables it.
+  HYPROXY_PORTAL_ORIGIN: ${HYPROXY_PORTAL_ORIGIN:-}
+  # qBittorrent WebUI for portal download requests (IP-whitelisted, no auth)
+  # and the Shows/Movies save paths on that host. Empty savepath disables the
+  # target (portal returns 503 for it).
+  HYPROXY_QBIT_URL: ${HYPROXY_QBIT_URL:-http://10.10.1.4:8080}
+  HYPROXY_QBIT_SAVEPATH_SHOWS: ${HYPROXY_QBIT_SAVEPATH_SHOWS:-}
+  HYPROXY_QBIT_SAVEPATH_MOVIES: ${HYPROXY_QBIT_SAVEPATH_MOVIES:-}
   # Gateway (data plane's OIDC relying party) + authz->IdP backchannel. These are
   # documented operator knobs (.env.example); the control-plane containers and the
   # cli need them so gateway_redirect_uri() resolves to the real public auth host

@@ -9,7 +9,7 @@ import { AsyncBody, Banner, Section } from "../components/ui";
 // (MAGNET_RE in server/src/hyproxy/admin/schemas.py).
 const MAGNET_RE = /^magnet:\?xt=urn:btih:(?:[0-9a-fA-F]{40}|[a-zA-Z2-7]{32})(?:&\S*)?$/;
 
-const TARGETS = ["Alpha", "Bravo"] as const;
+const TARGETS = ["Shows", "Movies"] as const;
 
 export function Downloads() {
   const admin = isAdmin();
@@ -17,7 +17,7 @@ export function Downloads() {
   const [msg, setMsg] = useState<string | null>(null);
   const [kind, setKind] = useState<"error" | "info">("info");
   const [magnet, setMagnet] = useState("");
-  const [target, setTarget] = useState<"alpha" | "bravo">("alpha");
+  const [target, setTarget] = useState<"shows" | "movies">("shows");
 
   async function submit() {
     if (!MAGNET_RE.test(magnet.trim())) {
@@ -63,7 +63,7 @@ export function Downloads() {
           onChange={(e) => setMagnet(e.target.value)}
           required
         />
-        <select value={target} onChange={(e) => setTarget(e.target.value as "alpha" | "bravo")}>
+        <select value={target} onChange={(e) => setTarget(e.target.value as "shows" | "movies")}>
           {TARGETS.map((t) => (
             <option key={t} value={t.toLowerCase()}>
               {t}
@@ -93,7 +93,7 @@ export function Downloads() {
                 <td className="mono magnet" title={r.magnet}>
                   {r.magnet}
                 </td>
-                <td>{r.target === "alpha" ? "Alpha" : "Bravo"}</td>
+                <td>{r.target === "shows" ? "Shows" : "Movies"}</td>
                 <td>
                   <span className={`status ${r.status}`}>{r.status}</span>
                   {r.error && r.status === "pending" && (

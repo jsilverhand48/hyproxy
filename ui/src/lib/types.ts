@@ -82,7 +82,7 @@ export interface DownloadRequest {
   user_id: string;
   user_email: string | null;
   magnet: string;
-  target: "alpha" | "bravo";
+  target: "shows" | "movies";
   status: "pending" | "approved" | "denied";
   created_at: string;
   reviewed_by: string | null;

@@ -275,7 +275,7 @@ class PasswordChangeIn(BaseModel):
 
 class DownloadRequestIn(BaseModel):
     magnet: str = Field(max_length=2048)
-    target: Literal["alpha", "bravo"]
+    target: Literal["shows", "movies"]
 
     @field_validator("magnet")
     @classmethod

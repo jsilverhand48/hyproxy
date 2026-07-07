@@ -15,8 +15,10 @@ WORKDIR /ui
 # targets the real issuer; the defaults keep local/dev builds unchanged.
 ARG VITE_IDP_ISSUER=https://idp.localhost:8300
 ARG VITE_ADMIN_UI_CLIENT_ID=admin-ui
+ARG VITE_PORTAL_HOST=""
 ENV VITE_IDP_ISSUER=$VITE_IDP_ISSUER \
-    VITE_ADMIN_UI_CLIENT_ID=$VITE_ADMIN_UI_CLIENT_ID
+    VITE_ADMIN_UI_CLIENT_ID=$VITE_ADMIN_UI_CLIENT_ID \
+    VITE_PORTAL_HOST=$VITE_PORTAL_HOST
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 COPY ui/ ./

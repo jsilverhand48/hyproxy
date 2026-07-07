@@ -149,9 +149,9 @@ async def _submit(
     """
     settings = get_settings()
     savepath = (
-        settings.qbit_savepath_alpha
-        if row.target == "alpha"
-        else settings.qbit_savepath_bravo
+        settings.qbit_savepath_shows
+        if row.target == "shows"
+        else settings.qbit_savepath_movies
     )
     # Defense in depth: the value passed the schema validator at insert time,
     # but never place anything non-magnet in the urls field.

@@ -172,7 +172,7 @@ class DownloadRequest(Base):
     __tablename__ = "download_requests"
     __table_args__ = (
         CheckConstraint(
-            "target IN ('alpha','bravo')", name="download_requests_target_check"
+            "target IN ('shows','movies')", name="download_requests_target_check"
         ),
         CheckConstraint(
             "status IN ('pending','approved','denied')",

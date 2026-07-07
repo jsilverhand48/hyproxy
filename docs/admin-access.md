@@ -16,7 +16,7 @@ actions (approving or denying standard users' download requests) require an
 admin-tier login but, unlike management mutations, no WebAuthn step-up,
 because the step-up flow returns to a fixed origin per request and the action
 set is narrow. The portal's qBittorrent integration is configured with
-`HYPROXY_QBIT_URL` and `HYPROXY_QBIT_SAVEPATH_ALPHA`/`_BRAVO`; the qBittorrent
+`HYPROXY_QBIT_URL` and `HYPROXY_QBIT_SAVEPATH_SHOWS`/`_MOVIES`; the qBittorrent
 WebUI must IP-whitelist the hyproxy host (no credentials are sent).
 
 Enabling the portal origin also requires registering the second redirect URI

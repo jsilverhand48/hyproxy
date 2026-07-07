@@ -103,11 +103,11 @@ class Settings(BaseSettings):
 
     # qBittorrent WebUI used for approved peer-to-peer download requests. The
     # hyproxy host must be IP-whitelisted in qBittorrent (no auth cookie is
-    # sent). The savepaths back the portal's Alpha/Bravo destination choices;
+    # sent). The savepaths back the portal's Shows/Movies destination choices;
     # an empty savepath disables submissions for that target.
     qbit_url: str = "http://10.10.1.4:8080"
-    qbit_savepath_alpha: str = ""
-    qbit_savepath_bravo: str = ""
+    qbit_savepath_shows: str = ""
+    qbit_savepath_movies: str = ""
 
     # Guacamole browser bridges (Phase 4). guac_cypher_key is base64 of the
     # 32-byte AES-256-CBC key shared with the Node guacamole-lite tunnel; the
