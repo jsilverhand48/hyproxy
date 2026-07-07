@@ -69,6 +69,28 @@ export interface AuthEvent {
   detail: Record<string, unknown>;
 }
 
+export interface MyResource {
+  id: string;
+  name: string;
+  protocol: string;
+  public_host: string | null;
+  description: string | null;
+}
+
+export interface DownloadRequest {
+  id: string;
+  user_id: string;
+  user_email: string | null;
+  magnet: string;
+  target: "alpha" | "bravo";
+  status: "pending" | "approved" | "denied";
+  created_at: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  submitted_at: string | null;
+  error: string | null;
+}
+
 export interface PolicyChange {
   id: number;
   ts: string;

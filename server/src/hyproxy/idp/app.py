@@ -46,15 +46,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="hyproxy-idp", docs_url=None, redoc_url=None, openapi_url=None)
     csp = _csp()
 
-    # The admin SPA (served on its own management-plane origin) must reach the
-    # cross-origin token/userinfo endpoints. Allow exactly that one origin, the
-    # two request headers the DPoP flow needs, and no credentials (the flow is
-    # bearer/DPoP, never cookie). Empty admin_ui_origin leaves CORS off.
-    admin_ui_origin = get_settings().admin_ui_origin
-    if admin_ui_origin:
+    # The SPA (served on the management-plane origin and, for the standard-user
+    # portal, on portal_origin) must reach the cross-origin token/userinfo
+    # endpoints. Allow exactly those configured origins, the two request
+    # headers the DPoP flow needs, and no credentials (the flow is bearer/DPoP,
+    # never cookie). No configured origins leaves CORS off.
+    settings = get_settings()
+    spa_origins = [o for o in (settings.admin_ui_origin, settings.portal_origin) if o]
+    if spa_origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=[admin_ui_origin],
+            allow_origins=spa_origins,
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["authorization", "dpop", "content-type"],
             allow_credentials=False,

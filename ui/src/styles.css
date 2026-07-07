@@ -236,3 +236,37 @@ th {
   justify-content: flex-end;
   margin-top: 1rem;
 }
+
+.grow {
+  flex: 1;
+  min-width: 16rem;
+}
+
+.magnet {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  border: 1px solid var(--line);
+}
+
+.status.pending {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.status.approved {
+  color: #6fcf7a;
+  border-color: #6fcf7a;
+}
+
+.status.denied {
+  color: var(--danger);
+  border-color: var(--danger);
+}

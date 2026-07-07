@@ -328,19 +328,20 @@ async def enroll_webauthn_verify(request: Request, db: DbDep, body: EnrollBody) 
 
 
 def valid_stepup_return(return_to: str) -> bool:
-    """The post-step-up target must be the configured admin-UI origin exactly.
+    """The post-step-up target must exactly match a configured SPA origin.
 
     Open-redirect defense identical in spirit to the gateway's return-URL check:
-    scheme + host + port must equal admin_ui_origin, no userinfo, no scheme
-    smuggling. Empty admin_ui_origin means no admin UI is wired, so nothing is a
-    valid target."""
-    origin = get_settings().admin_ui_origin
-    if not origin or not return_to:
+    scheme + host + port must equal admin_ui_origin or portal_origin, no
+    userinfo, no scheme smuggling. With neither origin configured no UI is
+    wired, so nothing is a valid target."""
+    settings = get_settings()
+    origins = [o for o in (settings.admin_ui_origin, settings.portal_origin) if o]
+    if not origins or not return_to:
         return False
     parts = urlsplit(return_to)
     if parts.scheme not in ("https", "http") or not parts.hostname or parts.username:
         return False
-    return f"{parts.scheme}://{parts.netloc}" == origin
+    return f"{parts.scheme}://{parts.netloc}" in origins
 
 
 @router.get("/stepup")

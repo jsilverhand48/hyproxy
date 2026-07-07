@@ -5,9 +5,9 @@ import {
   currentUserEmail,
   isAdmin,
   isAuthenticated,
-  showSignedIn,
   signOut,
 } from "./lib/auth";
+import { config } from "./lib/config";
 import { Users } from "./views/Users";
 import { Roles } from "./views/Roles";
 import { Resources } from "./views/Resources";
@@ -15,10 +15,13 @@ import { Policies } from "./views/Policies";
 import { AccessAudit } from "./views/AccessAudit";
 import { AuthEvents } from "./views/AuthEvents";
 import { PolicyChanges } from "./views/PolicyChanges";
+import { MyResources } from "./views/MyResources";
+import { Downloads } from "./views/Downloads";
+import { Account } from "./views/Account";
 
 type Boot = "loading" | "ready" | "error";
 
-const SECTIONS = [
+const ADMIN_SECTIONS = [
   { id: "users", label: "Users", render: () => <Users /> },
   { id: "roles", label: "Roles", render: () => <Roles /> },
   { id: "resources", label: "Resources", render: () => <Resources /> },
@@ -28,10 +31,24 @@ const SECTIONS = [
   { id: "changes", label: "Policy changes", render: () => <PolicyChanges /> },
 ] as const;
 
+const PORTAL_SECTIONS = [
+  { id: "my-resources", label: "My resources", render: () => <MyResources /> },
+  { id: "downloads", label: "Downloads", render: () => <Downloads /> },
+  { id: "account", label: "Account", render: () => <Account /> },
+] as const;
+
+// Standard users only ever get the portal sections. Admins get the management
+// sections too, except on the portal host, where the management API would
+// reject off-LAN calls anyway (the server enforces tier and LAN regardless of
+// what is rendered here).
+function visibleSections() {
+  return isAdmin() && !config.isPortal ? [...ADMIN_SECTIONS, ...PORTAL_SECTIONS] : [...PORTAL_SECTIONS];
+}
+
 export function App() {
   const [boot, setBoot] = useState<Boot>("loading");
   const [error, setError] = useState<string | null>(null);
-  const [section, setSection] = useState<string>("users");
+  const [section, setSection] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,10 +60,6 @@ export function App() {
         }
         if (!isAuthenticated()) {
           await beginLogin(); // navigates away; nothing below runs
-          return;
-        }
-        if (!isAdmin()) {
-          showSignedIn(); // navigates away; the panel must never render here
           return;
         }
         if (!cancelled) setBoot("ready");
@@ -71,16 +84,17 @@ export function App() {
       </div>
     );
 
-  const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  const sections = visibleSections();
+  const active = sections.find((s) => s.id === section) ?? sections[0];
   return (
     <div className="layout">
       <nav className="sidebar">
         <h1>hyproxy</h1>
         <ul>
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <li key={s.id}>
               <button
-                className={s.id === section ? "nav active" : "nav"}
+                className={s.id === active.id ? "nav active" : "nav"}
                 onClick={() => setSection(s.id)}
               >
                 {s.label}
@@ -89,7 +103,7 @@ export function App() {
           ))}
         </ul>
         <div className="who">
-          <span>{currentUserEmail() ?? "admin"}</span>
+          <span>{currentUserEmail() ?? "signed in"}</span>
           <button className="link" onClick={() => signOut()}>
             Sign out
           </button>

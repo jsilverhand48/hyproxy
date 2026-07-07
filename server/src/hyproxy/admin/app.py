@@ -1,13 +1,16 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from hyproxy.admin.routes.connections import router as connections_router
 from hyproxy.admin.routes.policies import router as policies_router
+from hyproxy.admin.routes.portal import router as portal_router
 from hyproxy.admin.routes.resources import router as resources_router
 from hyproxy.admin.routes.roles import router as roles_router
 from hyproxy.admin.routes.user_roles import router as user_roles_router
@@ -47,10 +50,26 @@ def _dist_dir() -> Path:
     return Path(configured) if configured else SERVER_DIR.parent / "ui" / "dist"
 
 
-def create_app() -> FastAPI:
-    """Management-plane API + admin SPA. Never internet-facing: bind loopback,
-    reach over LAN/WireGuard only (docs/admin-access.md)."""
-    app = FastAPI(title="hyproxy-admin", docs_url=None, redoc_url=None, openapi_url=None)
+def create_app(qbit_http: httpx.AsyncClient | None = None) -> FastAPI:
+    """Management-plane API + SPA. The management endpoints stay LAN/WireGuard
+    only (docs/admin-access.md); the /api/v1/portal endpoints and the SPA are
+    additionally served on the internet-facing portal host (portal_origin)."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.qbit_http = qbit_http or httpx.AsyncClient(
+            base_url=get_settings().qbit_url.rstrip("/"), timeout=10
+        )
+        yield
+        await app.state.qbit_http.aclose()
+
+    app = FastAPI(
+        title="hyproxy-admin",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
 
     csp = _csp()
 
@@ -72,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(connections_router)
     app.include_router(policies_router)
     app.include_router(viewers_router)
+    app.include_router(portal_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

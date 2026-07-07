@@ -58,15 +58,21 @@ async def _strong_credential_count(db: AsyncSession, user_id: uuid.UUID) -> int:
     return int(count or 0)
 
 
-async def _revoke_user_sessions(db: AsyncSession, user_id: uuid.UUID, ip: str) -> None:
-    rows = (
-        await db.scalars(
-            select(Session).where(Session.user_id == user_id, Session.revoked_at.is_(None))
-        )
-    ).all()
+async def _revoke_user_sessions(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    ip: str,
+    *,
+    reason: str = "admin_action",
+    exclude_session_id: uuid.UUID | None = None,
+) -> None:
+    stmt = select(Session).where(Session.user_id == user_id, Session.revoked_at.is_(None))
+    if exclude_session_id is not None:
+        stmt = stmt.where(Session.id != exclude_session_id)
+    rows = (await db.scalars(stmt)).all()
     for row in rows:
         await refresh_service.revoke_for_session(db, row.id)
-        await session_service.revoke(db, row, reason="admin_action", source_ip=ip)
+        await session_service.revoke(db, row, reason=reason, source_ip=ip)
 
 
 @router.get("")

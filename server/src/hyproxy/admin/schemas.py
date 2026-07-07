@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -242,3 +243,60 @@ class PolicyChangeOut(BaseModel):
     entity_id: uuid.UUID | None
     action: str
     change_json: dict[str, Any]
+
+
+# Standard-user portal ---------------------------------------------------------
+
+# Strictly a BitTorrent v1 magnet URI: 40-hex or 32-base32 infohash, optionally
+# followed by additional &-separated params. qBittorrent's `urls` field also
+# accepts http(s) URLs and local paths, so anything looser would let a portal
+# user make the server fetch arbitrary URLs on approval.
+MAGNET_RE = re.compile(
+    r"^magnet:\?xt=urn:btih:(?:[0-9a-fA-F]{40}|[a-zA-Z2-7]{32})(?:&\S*)?$"
+)
+
+
+class MyResourceOut(BaseModel):
+    """Resource listing for the caller. Deliberately omits internal host/ports."""
+
+    id: uuid.UUID
+    name: str
+    protocol: str
+    public_host: str | None
+    description: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class DownloadRequestIn(BaseModel):
+    magnet: str = Field(max_length=2048)
+    target: Literal["alpha", "bravo"]
+
+    @field_validator("magnet")
+    @classmethod
+    def _magnet_uri_only(cls, v: str) -> str:
+        v = v.strip()
+        if not MAGNET_RE.match(v):
+            raise ValueError("must be a magnet:?xt=urn:btih: URI")
+        return v
+
+
+class DownloadRequestOut(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    user_email: str | None = None
+    magnet: str
+    target: str
+    status: str
+    created_at: datetime
+    reviewed_by: uuid.UUID | None
+    reviewed_at: datetime | None
+    submitted_at: datetime | None
+    error: str | None
+
+    model_config = {"from_attributes": True}

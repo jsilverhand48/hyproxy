@@ -41,6 +41,13 @@ class AuthEventType(StrEnum):
     THROTTLE_APPLIED = "throttle.applied"
     ADMIN_TOTP_RESET = "admin.totp_reset"
     ADMIN_PASSWORD_RESET = "admin.password_reset"
+    USER_PASSWORD_CHANGED = "user.password_changed"
+    USER_PASSWORD_CHANGE_FAILED = "user.password_change_failed"
+    DOWNLOAD_REQUESTED = "download.requested"
+    DOWNLOAD_APPROVED = "download.approved"
+    DOWNLOAD_DENIED = "download.denied"
+    DOWNLOAD_SUBMITTED = "download.submitted"
+    DOWNLOAD_SUBMIT_FAILED = "download.submit_failed"
 
 
 # Only these keys may appear in detail; values must be short scalars.
@@ -62,6 +69,7 @@ ALLOWED_DETAIL_KEYS = frozenset(
         "old_ip",
         "new_ip",
         "email",
+        "target",
     }
 )
 

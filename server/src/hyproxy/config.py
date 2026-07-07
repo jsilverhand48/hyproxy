@@ -95,6 +95,20 @@ class Settings(BaseSettings):
     # (dev default).
     admin_lan_cidrs: str = ""
 
+    # Standard-user portal. The SPA is also served on this second, internet
+    # facing origin (scheme://host[:port]); it selects the DPoP htu for portal
+    # requests, is CORS-allowed on the IdP alongside admin_ui_origin, and is a
+    # valid step-up return target. Empty disables the portal origin (default).
+    portal_origin: str = ""
+
+    # qBittorrent WebUI used for approved peer-to-peer download requests. The
+    # hyproxy host must be IP-whitelisted in qBittorrent (no auth cookie is
+    # sent). The savepaths back the portal's Alpha/Bravo destination choices;
+    # an empty savepath disables submissions for that target.
+    qbit_url: str = "http://10.10.1.4:8080"
+    qbit_savepath_alpha: str = ""
+    qbit_savepath_bravo: str = ""
+
     # Guacamole browser bridges (Phase 4). guac_cypher_key is base64 of the
     # 32-byte AES-256-CBC key shared with the Node guacamole-lite tunnel; the
     # broker mints tokens under it. Empty disables guac. guac_grant_ttl bounds

@@ -168,6 +168,36 @@ class Policy(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=NOW)
 
 
+class DownloadRequest(Base):
+    __tablename__ = "download_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "target IN ('alpha','bravo')", name="download_requests_target_check"
+        ),
+        CheckConstraint(
+            "status IN ('pending','approved','denied')",
+            name="download_requests_status_check",
+        ),
+        Index("ix_download_requests_user_id", "user_id"),
+        Index("ix_download_requests_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=GEN_UUID)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
+    magnet: Mapped[str] = mapped_column(Text)
+    target: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default=text("'pending'"))
+    created_at: Mapped[datetime] = mapped_column(server_default=NOW)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    reviewed_at: Mapped[datetime | None]
+    submitted_at: Mapped[datetime | None]
+    error: Mapped[str | None] = mapped_column(Text)
+
+
 class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = (

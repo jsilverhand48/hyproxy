@@ -1,8 +1,27 @@
 # Management-Plane Access and Break-Glass Runbook
 
-The admin API (port 8400) and, later, the admin UI are management-plane
-services. They are never internet-facing. This document describes the only
-supported ways in, and the recovery paths when normal access is impossible.
+The admin API (port 8400) and the admin UI are management-plane services.
+The management endpoints are never internet-facing. This document describes
+the only supported ways in, and the recovery paths when normal access is
+impossible.
+
+One deliberate exception: the same app also serves the standard-user portal
+(`/api/v1/portal` plus the SPA) on a second, internet-facing host configured
+via `HYPROXY_PORTAL_ORIGIN` and a non-`lan_only` data-plane route (see
+`dataplane/config.example.json`, `apps.example.com`). Portal endpoints
+authenticate with the same DPoP-bound tokens but skip the LAN check; every
+management endpoint keeps `require_admin` (LAN CIDR check + admin tier), so
+the split origin does not widen management-plane exposure. Portal review
+actions (approving or denying standard users' download requests) require an
+admin-tier login but, unlike management mutations, no WebAuthn step-up,
+because the step-up flow returns to a fixed origin per request and the action
+set is narrow. The portal's qBittorrent integration is configured with
+`HYPROXY_QBIT_URL` and `HYPROXY_QBIT_SAVEPATH_ALPHA`/`_BRAVO`; the qBittorrent
+WebUI must IP-whitelist the hyproxy host (no credentials are sent).
+
+Enabling the portal origin also requires registering the second redirect URI
+on the SPA's OAuth client (`hyproxy create-client` upserts and REPLACES the
+URI list, so pass both `--redirect-uri` values).
 The WireGuard tunnel and break-glass hardware are set up manually by the
 operator; nothing in this repository automates them by design.
 
