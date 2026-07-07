@@ -5,7 +5,9 @@ check_request contract (JWT + DPoP + session liveness + IP binding). It is
 never internet-facing: LAN/WireGuard only (docs/admin-access.md).
 """
 
+import ipaddress
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
@@ -21,6 +23,33 @@ DbDep = Annotated[AsyncSession, Depends(get_db)]
 
 def client_ip(request: Request) -> str:
     return resolve_client_ip(request)
+
+
+@lru_cache(maxsize=4)
+def _lan_networks(cidrs: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    return tuple(ipaddress.ip_network(c.strip()) for c in cidrs.split(",") if c.strip())
+
+
+def require_lan_client(request: Request) -> None:
+    """Reject admin API calls from outside admin_lan_cidrs (403).
+
+    Defense in depth behind the data plane's lan_only edge block, so a
+    re-rendered proxy config cannot silently re-expose the console. The client
+    IP comes from the data plane's sanitized X-Forwarded-For (uvicorn
+    --proxy-headers); only the data plane can reach the loopback-published
+    port. Empty setting disables the check (dev).
+    """
+    cidrs = get_settings().admin_lan_cidrs
+    if not cidrs:
+        return
+    try:
+        addr = ipaddress.ip_address(client_ip(request))
+    except ValueError:
+        addr = None
+    if addr is None or not any(addr in net for net in _lan_networks(cidrs)):
+        raise HTTPException(
+            status_code=403, detail="admin console is restricted to the local network"
+        )
 
 
 def _expected_htu(request: Request) -> str:
@@ -42,6 +71,7 @@ def _expected_htu(request: Request) -> str:
 
 
 async def require_admin(request: Request, db: DbDep) -> sessions.AuthedRequest:
+    require_lan_client(request)
     try:
         authed = await sessions.check_request(
             db,

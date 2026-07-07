@@ -45,6 +45,10 @@ x-server-env: &server-env
   # (idp/web/webauthn_routes.py). When admin and idp are different hosts the
   # SPA's token exchange is cross-origin, so the IdP must know the UI origin.
   HYPROXY_ADMIN_UI_ORIGIN: ${HYPROXY_ADMIN_UI_ORIGIN:-}
+  # LAN allowlist for the admin API (defense in depth behind the data plane's
+  # lan_only edge block). The container cannot see the host's interfaces, so
+  # the LAN subnet(s) must be spelled out. Empty disables the check.
+  HYPROXY_ADMIN_LAN_CIDRS: ${HYPROXY_ADMIN_LAN_CIDRS:-}
   # Gateway (data plane's OIDC relying party) + authz->IdP backchannel. These are
   # documented operator knobs (.env.example); the control-plane containers and the
   # cli need them so gateway_redirect_uri() resolves to the real public auth host

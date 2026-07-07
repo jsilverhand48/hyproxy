@@ -51,6 +51,11 @@ type Server struct {
 	authHost     string
 	staticRoutes map[string]config.Route
 	guacBackend  string
+	// LAN client allowlist for lan_only routes (config lan_cidrs, or the
+	// host's own interface subnets when unset) and where blocked browsers
+	// are redirected (the IdP login page).
+	lanNets         []*net.IPNet
+	lanOnlyRedirect string
 	// transport backs every upstream proxy; nil uses http.DefaultTransport
 	// (verifies TLS). Non-nil only when upstream verification is disabled.
 	transport http.RoundTripper
@@ -66,15 +71,21 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		transport = insecureUpstreamTransport()
 		log.Warn("upstream TLS verification disabled for https backends (upstream_insecure_skip_verify=true)")
 	}
+	lanNets, err := resolveLanNets(cfg, log)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		authz:        checker,
-		cookieName:   cfg.GatewayCookieName,
-		authProxy:    newReverseProxy(authBackend, log, transport),
-		log:          log,
-		authHost:     cfg.AuthHost,
-		staticRoutes: cfg.Routes,
-		guacBackend:  cfg.GuacBackend,
-		transport:    transport,
+		authz:           checker,
+		cookieName:      cfg.GatewayCookieName,
+		authProxy:       newReverseProxy(authBackend, log, transport),
+		log:             log,
+		authHost:        cfg.AuthHost,
+		staticRoutes:    cfg.Routes,
+		guacBackend:     cfg.GuacBackend,
+		lanNets:         lanNets,
+		lanOnlyRedirect: cfg.LanOnlyRedirect,
+		transport:       transport,
 	}
 	// Initial snapshot: static infra routes only. The management plane
 	// (idp/admin) is reachable even if the control plane is down at boot; DB
@@ -158,6 +169,81 @@ func newReverseProxy(backend *url.URL, log *slog.Logger, transport http.RoundTri
 	}
 }
 
+// resolveLanNets builds the client allowlist for lan_only routes: the
+// configured lan_cidrs, or (when unset) the IPv4 subnets of the host's own
+// up interfaces, so "LAN" defaults to "the same subnet(s) as this server".
+// Fails closed: a lan_only route with no resolvable networks is a startup
+// error, never an open route.
+func resolveLanNets(cfg *config.Config, log *slog.Logger) ([]*net.IPNet, error) {
+	lanOnly := false
+	for _, r := range cfg.Routes {
+		if r.LanOnly {
+			lanOnly = true
+			break
+		}
+	}
+	var nets []*net.IPNet
+	if len(cfg.LanCidrs) > 0 {
+		for _, cidr := range cfg.LanCidrs {
+			_, n, err := net.ParseCIDR(cidr)
+			if err != nil {
+				return nil, fmt.Errorf("lan_cidrs: %w", err)
+			}
+			nets = append(nets, n)
+		}
+	} else {
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			if lanOnly {
+				return nil, fmt.Errorf("lan_only route configured but interface detection failed: %w", err)
+			}
+			return nil, nil
+		}
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 {
+				continue
+			}
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, addr := range addrs {
+				ipn, ok := addr.(*net.IPNet)
+				if !ok || ipn.IP.To4() == nil {
+					continue
+				}
+				nets = append(nets, &net.IPNet{IP: ipn.IP.Mask(ipn.Mask), Mask: ipn.Mask})
+			}
+		}
+	}
+	if lanOnly {
+		if len(nets) == 0 {
+			return nil, fmt.Errorf("lan_only route configured but no LAN networks resolved; set lan_cidrs")
+		}
+		printable := make([]string, len(nets))
+		for i, n := range nets {
+			printable[i] = n.String()
+		}
+		log.Info("lan_only routes restricted to", "networks", strings.Join(printable, ", "))
+	}
+	return nets, nil
+}
+
+// isLAN reports whether ip (a bare address string) falls inside any resolved
+// LAN network. Unparseable input is never LAN.
+func (s *Server) isLAN(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, n := range s.lanNets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -233,6 +319,20 @@ func isPublicGuacPath(path string) bool {
 func (s *Server) serveApp(
 	w http.ResponseWriter, r *http.Request, rs *routeSet, host string, route config.Route,
 ) {
+	// Network ACL before anything else: a lan_only route (the admin console)
+	// is invisible from outside the LAN regardless of authentication state.
+	// Browsers are bounced to the login page; the IdP stays internet-reachable
+	// so admins can still authenticate, they just never get the console.
+	if route.LanOnly && !s.isLAN(clientIP(r)) {
+		s.log.Info("lan_only deny", "host", host, "source_ip", clientIP(r))
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && s.lanOnlyRedirect != "" {
+			http.Redirect(w, r, s.lanOnlyRedirect, http.StatusFound)
+			return
+		}
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	stripIdentityHeaders(r.Header)
 	upstream := rs.proxies[host]
 	cookie := s.gatewayCookie(r) // always strip the gateway cookie from upstream

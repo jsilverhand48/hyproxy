@@ -8,6 +8,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -26,6 +27,12 @@ type Route struct {
 	// guacamole-lite service). Such routes are authorized by single-use grant
 	// consumption (/guac/consume) instead of the per-request /authz/check.
 	GuacTunnel bool `json:"guac_tunnel,omitempty"`
+	// LanOnly restricts the route to clients whose TCP peer address is inside
+	// the LAN networks (Config.LanCidrs, or the host's own interface subnets
+	// when unset). Blocked browsers are redirected to Config.LanOnlyRedirect.
+	// Set on the admin console route: it must never be reachable from the
+	// internet, even by an authenticated admin.
+	LanOnly bool `json:"lan_only,omitempty"`
 }
 
 func (r Route) AuthRequired() bool { return r.Auth == nil || *r.Auth }
@@ -54,6 +61,15 @@ type Config struct {
 	// RoutesRefreshSecs is how often to poll the control plane for DB routes.
 	// Zero uses DefaultRoutesRefreshSecs.
 	RoutesRefreshSecs int `json:"routes_refresh_secs"`
+	// LanCidrs is the explicit allowlist of client networks for lan_only routes
+	// (e.g. ["10.0.0.0/24"]). Empty means the data plane auto-detects the
+	// subnets of the host's own network interfaces at startup, so "LAN" is
+	// "the same subnet(s) as this server".
+	LanCidrs []string `json:"lan_cidrs,omitempty"`
+	// LanOnlyRedirect is where browsers (GET/HEAD) blocked by a lan_only route
+	// are sent, typically the IdP login page. Non-GET/HEAD requests and an
+	// empty value get a plain 403.
+	LanOnlyRedirect string `json:"lan_only_redirect,omitempty"`
 	// UpstreamInsecureSkipVerify disables TLS certificate verification when the
 	// proxy dials https backends. Operator escape hatch for backends with
 	// self-signed or IP-only certs (e.g. Plex on a bare IP); it does NOT relax
@@ -101,6 +117,20 @@ func (c *Config) Validate() error {
 	if c.GuacBackend != "" {
 		if _, err := parseBackend(c.GuacBackend); err != nil {
 			return fmt.Errorf("guac_backend: %w", err)
+		}
+	}
+	for _, cidr := range c.LanCidrs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("lan_cidrs: %w", err)
+		}
+	}
+	if c.LanOnlyRedirect != "" {
+		u, err := url.Parse(c.LanOnlyRedirect)
+		if err != nil {
+			return fmt.Errorf("lan_only_redirect: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("lan_only_redirect must be an absolute http(s) URL, got %q", c.LanOnlyRedirect)
 		}
 	}
 	c.AuthHost = strings.ToLower(c.AuthHost)

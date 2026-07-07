@@ -11,6 +11,11 @@
 # sit behind the gateway forward-auth. Everything else (app backends) is
 # forward-authed.
 #
+# The admin console is additionally lan_only: only clients inside the server's
+# own subnet(s) (or DP_LAN_CIDRS when set) reach it; everyone else is bounced
+# to the IdP login page. Admins can still authenticate from the internet, they
+# just never get the console.
+#
 # The "routes" object below is INFRA ONLY (idp/admin). Application routes are
 # DB-driven: create resources with a public_host in the admin UI and the data
 # plane polls the control plane (/authz/routes) and hot-loads them, no restart
@@ -28,6 +33,9 @@
 #   ROUTES_REFRESH_SECS  DB-route poll interval (default 10)
 #   DP_UPSTREAM_INSECURE_SKIP_VERIFY  "true" to skip TLS verification on https
 #                      backends (self-signed / IP-only certs). Default false.
+#   DP_LAN_CIDRS       comma-separated client networks allowed on lan_only
+#                      routes (the admin console). Default empty: the data
+#                      plane auto-detects the host's own interface subnets.
 
 set -euo pipefail
 
@@ -48,6 +56,13 @@ case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
   *) UPSTREAM_INSECURE=false ;;
 esac
 
+# Optional explicit LAN allowlist; empty emits no lan_cidrs key (auto-detect).
+LAN_CIDRS_LINE=""
+if [ -n "${DP_LAN_CIDRS:-}" ]; then
+  LAN_CIDRS_JSON=$(printf '%s' "$DP_LAN_CIDRS" | awk -v RS=',' 'NF { gsub(/^[ \t]+|[ \t]+$/, ""); printf "%s\"%s\"", (n++ ? ", " : ""), $0 }')
+  LAN_CIDRS_LINE="  \"lan_cidrs\": [$LAN_CIDRS_JSON],"
+fi
+
 cat > "$DP_OUT" <<JSON
 {
   "listen": "$DP_LISTEN",
@@ -60,9 +75,11 @@ cat > "$DP_OUT" <<JSON
   "guac_backend": "$GUAC_BACKEND",
   "routes_refresh_secs": $ROUTES_REFRESH_SECS,
   "upstream_insecure_skip_verify": $UPSTREAM_INSECURE,
+${LAN_CIDRS_LINE}
+  "lan_only_redirect": "https://idp.$HYPROXY_DOMAIN/auth/login",
   "routes": {
     "idp.$HYPROXY_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
-    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
+    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false, "lan_only": true }
   }
 }
 JSON

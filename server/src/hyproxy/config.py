@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     # admin app serves it only when the directory exists (so an unbuilt tree
     # still runs the API alone).
     admin_ui_dist: str = ""
+    # Comma-separated client networks allowed to use the admin API (e.g.
+    # "10.0.0.0/24,127.0.0.0/8"). Defense in depth behind the data plane's
+    # lan_only edge block: the containerized admin app cannot see the host's
+    # interfaces, so the LAN must be spelled out. Empty disables the check
+    # (dev default).
+    admin_lan_cidrs: str = ""
 
     # Guacamole browser bridges (Phase 4). guac_cypher_key is base64 of the
     # 32-byte AES-256-CBC key shared with the Node guacamole-lite tunnel; the

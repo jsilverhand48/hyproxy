@@ -8,6 +8,7 @@
   "gateway_cookie_name": "__Secure-gw",
   "guac_backend": "http://127.0.0.1:8600",
   "routes_refresh_secs": 10,
+  "lan_only_redirect": "https://idp.localhost:8443/auth/login",
   "routes": {
     "idp.localhost": {
       "backend": "http://127.0.0.1:8300",
@@ -15,7 +16,8 @@
     },
     "admin.localhost": {
       "backend": "http://127.0.0.1:8400",
-      "auth": false
+      "auth": false,
+      "lan_only": true
     }
   }
 }
