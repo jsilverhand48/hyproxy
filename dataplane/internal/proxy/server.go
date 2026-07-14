@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"hyproxy/dataplane/internal/authz"
 	"hyproxy/dataplane/internal/config"
@@ -45,6 +48,16 @@ type Server struct {
 	authProxy  *httputil.ReverseProxy
 	routes     atomic.Pointer[routeSet]
 	log        *slog.Logger
+
+	// Host-scope allow decisions cached per control-plane hint; purged
+	// whenever the route table actually changes.
+	authzCache *authzCache
+	// swapMu serializes SwapRoutes so lastDBRoutes and the snapshot/cache
+	// purge stay consistent; lastDBRoutes detects no-op swaps from the
+	// periodic route poller (an unconditional purge would cap the decision
+	// cache's effective lifetime at the poll interval).
+	swapMu       sync.Mutex
+	lastDBRoutes map[string]config.Route
 
 	// Fixed at startup, used to rebuild routeSets on swap.
 	authHost     string
@@ -79,6 +92,7 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		cookieName:      cfg.GatewayCookieName,
 		authProxy:       newReverseProxy(authBackend, log, transport),
 		log:             log,
+		authzCache:      newAuthzCache(),
 		authHost:        cfg.AuthHost,
 		staticRoutes:    cfg.Routes,
 		guacBackend:     cfg.GuacBackend,
@@ -134,12 +148,22 @@ func (s *Server) buildRouteSet(dbRoutes map[string]config.Route) (*routeSet, err
 
 // SwapRoutes rebuilds the routing snapshot from a fresh set of DB routes and
 // installs it atomically. In-flight requests keep using the previous snapshot.
+// An unchanged table is a no-op so the periodic poller doesn't churn the
+// snapshot or flush the authz decision cache; any real change purges the
+// cache (route policy may have moved underneath cached decisions).
 func (s *Server) SwapRoutes(dbRoutes map[string]config.Route) error {
+	s.swapMu.Lock()
+	defer s.swapMu.Unlock()
+	if s.lastDBRoutes != nil && reflect.DeepEqual(dbRoutes, s.lastDBRoutes) {
+		return nil
+	}
 	rs, err := s.buildRouteSet(dbRoutes)
 	if err != nil {
 		return fmt.Errorf("build route set: %w", err)
 	}
 	s.routes.Store(rs)
+	s.lastDBRoutes = dbRoutes
+	s.authzCache.purge()
 	return nil
 }
 
@@ -342,11 +366,29 @@ func (s *Server) serveApp(
 		return
 	}
 
+	// Host-scope decision cache: only allows the control plane explicitly
+	// marked path/time-independent land here, so a hit can skip the
+	// per-request check. Anonymous requests (no gateway cookie) never touch
+	// the cache.
+	now := time.Now()
+	srcIP := clientIP(r)
+	var cacheKey string
+	if cookie != "" {
+		cacheKey = authzCacheKey(host, route.BackendPort, srcIP, cookie)
+		if hdrs, ok := s.authzCache.get(cacheKey, now); ok {
+			for name, value := range hdrs {
+				r.Header.Set(name, value)
+			}
+			upstream.ServeHTTP(w, r)
+			return
+		}
+	}
+
 	decision, err := s.authz.Check(r.Context(), authz.CheckRequest{
 		Host:          host,
 		Method:        r.Method,
 		URI:           r.URL.RequestURI(),
-		SourceIP:      clientIP(r),
+		SourceIP:      srcIP,
 		BackendPort:   route.BackendPort,
 		GatewayCookie: cookie,
 	})
@@ -359,6 +401,10 @@ func (s *Server) serveApp(
 
 	switch decision.Decision {
 	case "allow":
+		if cacheKey != "" && decision.CacheScope == "host" && decision.CacheTTLSecs > 0 {
+			s.authzCache.put(cacheKey, decision.Headers,
+				time.Duration(decision.CacheTTLSecs)*time.Second, now)
+		}
 		for name, value := range decision.Headers {
 			r.Header.Set(name, value)
 		}

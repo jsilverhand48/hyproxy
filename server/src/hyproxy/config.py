@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     )
 
     db_url: str = "postgresql+asyncpg://hyproxy:devonly@127.0.0.1:5433/hyproxy"
+    # Async engine pool, per process (each app process holds its own pool).
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
     master_key_file: str = "./.dev/master.keys"
     # Secrets backend: "file" (dev, key on disk) or "tpm" (production, master key
     # sealed to the TPM and unsealed into memory only). See core/secrets.py.
@@ -57,6 +60,11 @@ class Settings(BaseSettings):
 
     # Session touch write throttle (seconds)
     session_touch_interval: int = 60
+
+    # Data-plane authz decision cache TTL (seconds). Sent only with allow
+    # decisions whose granting policy is path/time-independent; bounds
+    # revocation latency for those hosts. 0 disables caching hints.
+    authz_cache_ttl: int = 20
 
     # JWKS
     jwks_cache_max_age: int = 300

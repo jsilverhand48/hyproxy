@@ -210,6 +210,9 @@ services:
       - hyproxy.authz.app:app
       - "--host=0.0.0.0"
       - "--port=8500"
+      # 2 workers: /authz/check gates every proxied request on auth-required
+      # routes; one event loop queues concurrent media-segment checks.
+      - "--workers=2"
       - "--proxy-headers"
       - "--forwarded-allow-ips=*"
     environment: *server-env

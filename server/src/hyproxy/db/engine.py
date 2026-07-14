@@ -17,7 +17,13 @@ _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
-        _engine = create_async_engine(get_settings().db_url, pool_pre_ping=True)
+        settings = get_settings()
+        kwargs: dict = {"pool_pre_ping": True}
+        if settings.db_url.startswith("postgresql"):
+            # QueuePool sizing; not valid for sqlite's pool classes.
+            kwargs["pool_size"] = settings.db_pool_size
+            kwargs["max_overflow"] = settings.db_max_overflow
+        _engine = create_async_engine(settings.db_url, **kwargs)
     return _engine
 
 

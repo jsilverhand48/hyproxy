@@ -41,6 +41,11 @@ class CheckResponse(BaseModel):
     reason: str = ""
     headers: dict[str, str] = {}
     redirect: str = ""
+    # Data-plane cache hint: "host" only on allow decisions that provably
+    # hold for every path/time on this host (see decision.host_stable).
+    # Denies and constrained allows stay "none" and are re-checked per request.
+    cache_scope: str = "none"  # "host" | "none"
+    cache_ttl_secs: int = 0
 
 
 async def _audit(
@@ -165,6 +170,8 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
     )
     if not decision.allowed:
         return CheckResponse(decision="deny", reason=decision.reason)
+    cache_ttl = settings.authz_cache_ttl
+    cacheable = access.host_stable and cache_ttl > 0
     return CheckResponse(
         decision="allow",
         reason=decision.reason,
@@ -173,4 +180,6 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
             "X-Auth-User-Id": user.external_id,
             "X-Auth-Roles": ",".join(access.role_names),
         },
+        cache_scope="host" if cacheable else "none",
+        cache_ttl_secs=cache_ttl if cacheable else 0,
     )

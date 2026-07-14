@@ -46,6 +46,11 @@ type CheckResponse struct {
 	Reason   string            `json:"reason"`
 	Headers  map[string]string `json:"headers"`
 	Redirect string            `json:"redirect"`
+	// Cache hints: the control plane sets CacheScope "host" only on allow
+	// decisions that hold for every path/time on the host. Zero values
+	// (older control plane) mean never cache.
+	CacheScope   string `json:"cache_scope"`
+	CacheTTLSecs int    `json:"cache_ttl_secs"`
 }
 
 func (c *Client) Check(ctx context.Context, req CheckRequest) (CheckResponse, error) {
