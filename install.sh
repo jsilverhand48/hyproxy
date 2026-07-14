@@ -23,9 +23,9 @@
 #   - runs bootstrap.sh (installs deps, opens the firewall, builds images,
 #     migrates, creates the first admin, builds the data-plane binary); on a
 #     re-run the break-glass admin gets a FRESH one-time temporary password,
-#   - issues the Let's Encrypt wildcard cert via lego DNS-01 (no wait on DNS
-#     propagation: the challenge record is assumed applied and Let's Encrypt
-#     validates from its own resolvers),
+#   - issues the Let's Encrypt wildcard cert via lego DNS-01 (no propagation
+#     wait: the self-check queries the domain's authoritative nameservers
+#     directly, so it passes as soon as the provider API writes the record),
 #   - installs and enables the systemd units (data plane + renewal timer),
 #   - brings up the control plane and starts the data plane.
 #
@@ -114,6 +114,7 @@ esac
 have git  || dnf install -y git
 have curl || dnf install -y curl
 have openssl || dnf install -y openssl
+have dig  || dnf install -y bind-utils  # cert script pins lego to the authoritative NS
 
 # TPM 2.0 is mandatory: the master key is sealed to hardware, never kept on disk.
 [ -e /dev/tpmrm0 ] || c_die "no TPM 2.0 resource manager at /dev/tpmrm0; production installs require a TPM"
@@ -549,12 +550,18 @@ server_args=()
 
 common=(--accept-tos --email "$ACME_EMAIL" --dns "$LEGO_DNS_PROVIDER"
         --domains "*.$HYPROXY_DOMAIN" --domains "$HYPROXY_DOMAIN"
-        --path "$LEGO_PATH"
-        # Skip lego's local propagation self-check on the TXT challenge record:
-        # assume the provider applied it and move straight to validation.
-        # Let's Encrypt checks from its own resolvers regardless.
-        --dns.propagation-disable-ans
-        "${server_args[@]}")
+        --path "$LEGO_PATH" "${server_args[@]}")
+
+# Pin lego's DNS self-check to the domain's authoritative nameservers: they
+# serve the TXT challenge record the instant the provider API writes it, so
+# the propagation check passes immediately instead of stalling on a LAN
+# resolver's cached NXDOMAIN for _acme-challenge.<domain> (the record is
+# gone again by the time anyone digs by hand: lego deletes it on cleanup).
+# --dns.resolvers is supported by every lego version, unlike the
+# propagation-skip flags. If the NS lookup fails, lego's defaults apply.
+for _ns in $(dig +short NS "$HYPROXY_DOMAIN" 2>/dev/null); do
+  common+=(--dns.resolvers "${_ns%.}:53")
+done
 
 mode="${1:-auto}"
 # lego stores the wildcard cert under a sanitized name: *. -> _.
