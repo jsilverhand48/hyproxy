@@ -20,9 +20,15 @@ type Client struct {
 }
 
 func NewClient(baseURL string) *Client {
+	// Every authed proxied request pays a /authz/check round-trip; the
+	// default transport keeps only 2 idle conns per host, which forces
+	// re-dials under concurrent segment fetches.
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns = 64
+	t.MaxIdleConnsPerHost = 64
 	return &Client{
 		base: baseURL,
-		http: &http.Client{Timeout: 5 * time.Second},
+		http: &http.Client{Timeout: 5 * time.Second, Transport: t},
 	}
 }
 

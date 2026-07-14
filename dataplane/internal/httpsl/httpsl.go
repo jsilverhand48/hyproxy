@@ -17,14 +17,22 @@ type HTTPSListener struct {
 }
 
 func New(addr string, handler http.Handler, certs *tlsconf.CertReloader) *HTTPSListener {
+	// HTTP/1.1 only: WebSocket upgrades (guac tunnels) require it, and h2
+	// stream flow control throttles high-bitrate media through the proxy.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
 	return &HTTPSListener{
 		server: &http.Server{
-			Addr:              addr,
-			Handler:           handler,
-			TLSConfig:         tlsconf.ServerConfig(certs),
+			Addr:      addr,
+			Handler:   handler,
+			TLSConfig: tlsconf.ServerConfig(certs),
+			Protocols: protocols,
+			// No ReadTimeout/WriteTimeout: they are absolute per-request
+			// deadlines that survive the WebSocket hijack and would cut
+			// long-lived streams and tunnels. ReadHeaderTimeout still bounds
+			// slowloris; IdleTimeout must stay explicit (zero inherits
+			// ReadTimeout).
 			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       60 * time.Second,
-			WriteTimeout:      120 * time.Second,
 			IdleTimeout:       90 * time.Second,
 			MaxHeaderBytes:    64 << 10,
 		},

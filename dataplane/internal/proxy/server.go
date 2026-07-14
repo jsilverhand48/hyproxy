@@ -5,7 +5,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -56,8 +55,9 @@ type Server struct {
 	// are redirected (the IdP login page).
 	lanNets         []*net.IPNet
 	lanOnlyRedirect string
-	// transport backs every upstream proxy; nil uses http.DefaultTransport
-	// (verifies TLS). Non-nil only when upstream verification is disabled.
+	// transport backs every upstream proxy: one shared pool tuned for
+	// streaming (see newUpstreamTransport). TLS verification is disabled
+	// only when upstream_insecure_skip_verify is set.
 	transport http.RoundTripper
 }
 
@@ -66,9 +66,8 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 	if err != nil {
 		return nil, err
 	}
-	var transport http.RoundTripper
+	transport := newUpstreamTransport(cfg.UpstreamInsecureSkipVerify)
 	if cfg.UpstreamInsecureSkipVerify {
-		transport = insecureUpstreamTransport()
 		log.Warn("upstream TLS verification disabled for https backends (upstream_insecure_skip_verify=true)")
 	}
 	lanNets, err := resolveLanNets(cfg, log)
@@ -144,18 +143,14 @@ func (s *Server) SwapRoutes(dbRoutes map[string]config.Route) error {
 	return nil
 }
 
-// insecureUpstreamTransport clones the default transport and disables TLS
-// verification for upstream (backend) connections only. See
-// config.Config.UpstreamInsecureSkipVerify for the security caveats.
-func insecureUpstreamTransport() *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // operator opt-in for backends without valid certs
-	return t
-}
-
 func newReverseProxy(backend *url.URL, log *slog.Logger, transport http.RoundTripper) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Transport: transport,
+		// Flush after every write so known-length responses (media segments,
+		// progressive downloads) stream instead of pooling in the 32KB copy
+		// buffer; chunked/SSE responses already flush immediately.
+		FlushInterval: -1,
+		BufferPool:    copyBufPool,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(backend)         // never derived from the client (SSRF invariant)
 			pr.SetXForwarded()         // replaces inbound X-Forwarded-*, no spoof passthrough
