@@ -74,6 +74,13 @@ x-server-env: &server-env
   # Control plane sits behind the data plane (sole TLS ingress); trust its
   # sanitized X-Forwarded-For so session source-IP binding uses the browser IP.
   HYPROXY_TRUST_FORWARDED_FOR: ${HYPROXY_TRUST_FORWARDED_FOR:-false}
+  # Centralized logging. The host dir (HYPROXY_LOG_DIR in .env) is bind-mounted
+  # at the fixed container path /var/log/hyproxy; the :+ substitution keeps the
+  # in-container value empty (file logging off, stderr only) when the host var
+  # is unset, so dev keeps zero friction.
+  HYPROXY_LOG_DIR: ${HYPROXY_LOG_DIR:+/var/log/hyproxy}
+  HYPROXY_LOG_LEVEL: ${HYPROXY_LOG_LEVEL:-INFO}
+  HYPROXY_LOG_MAX_BYTES: ${HYPROXY_LOG_MAX_BYTES:-52428800}
 
 # TPM secrets backend: pass the host TPM resource-manager device into every
 # control-plane service that needs the master key, so tpm_unseal
@@ -143,6 +150,8 @@ services:
     entrypoint: ["python", "-m", "hyproxy.cli"]
     environment: *server-env
     secrets: [master_key]
+    volumes:
+      - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,6 +173,8 @@ services:
       - "--forwarded-allow-ips=*"
     environment: *server-env
     secrets: [master_key]
+    volumes:
+      - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
       - "127.0.0.1:8300:8300"
     depends_on:
@@ -189,6 +200,8 @@ services:
       - "--forwarded-allow-ips=*"
     environment: *server-env
     secrets: [master_key]
+    volumes:
+      - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
       - "127.0.0.1:8400:8400"
     depends_on:
@@ -217,6 +230,8 @@ services:
       - "--forwarded-allow-ips=*"
     environment: *server-env
     secrets: [master_key]
+    volumes:
+      - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
       - "127.0.0.1:8500:8500"
     depends_on:
@@ -241,12 +256,23 @@ services:
       context: ./tunnel
       dockerfile: Dockerfile
     image: hyproxy-tunnel:local
+    # The tunnel runs as the node user (not uid 10001), so it joins the host
+    # hyproxy group (HYPROXY_GID, written to .env by install.sh) to write the
+    # setgid log dir. The default re-adds the node user's own gid (no-op).
+    group_add:
+      - "${HYPROXY_GID:-1000}"
     environment:
       PORT: "8600"
       BIND_HOST: "0.0.0.0"
       GUACD_HOST: guacd
       GUACD_PORT: "4822"
       GUAC_CYPHER_KEY: ${HYPROXY_GUAC_CYPHER_KEY:-}
+      # Same :+ gating as x-server-env: file logging only when the host sets
+      # HYPROXY_LOG_DIR (the tunnel keeps its unprefixed env style).
+      LOG_DIR: ${HYPROXY_LOG_DIR:+/var/log/hyproxy}
+      LOG_MAX_BYTES: ${HYPROXY_LOG_MAX_BYTES:-52428800}
+    volumes:
+      - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
       - "127.0.0.1:8600:8600"
     depends_on:

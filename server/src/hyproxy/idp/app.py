@@ -13,6 +13,8 @@ from hyproxy.idp.oidc.token import router as token_router
 from hyproxy.idp.oidc.userinfo import router as userinfo_router
 from hyproxy.idp.web.routes import router as web_router
 from hyproxy.idp.web.webauthn_routes import router as webauthn_router
+from hyproxy.logs import setup_logging
+
 
 def _csp() -> str:
     """Build the auth-surface CSP.
@@ -43,6 +45,7 @@ def _csp() -> str:
 
 
 def create_app() -> FastAPI:
+    setup_logging("idp")
     app = FastAPI(title="hyproxy-idp", docs_url=None, redoc_url=None, openapi_url=None)
     csp = _csp()
 

@@ -14,10 +14,12 @@ docs/security-notes.md (Phase 5).
 """
 
 import json
+import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from sqlalchemy import select
@@ -59,6 +61,35 @@ class JsonLinesSink:
         for rec in records:
             self._stream.write(json.dumps(rec, separators=(",", ":"), default=str) + "\n")
         self._stream.flush()
+
+
+class RotatingFileSink:
+    """JSON lines into log_dir/audit.log with the shared rotation policy
+    (log_max_bytes, log_backup_count archives). Records keep the _fmt_*
+    shape; service=audit is added for scheme conformity with logs.py."""
+
+    def __init__(self, path: Path, max_bytes: int, backup_count: int = 2) -> None:
+        from hyproxy.logs import SafeRotatingFileHandler
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._handler = SafeRotatingFileHandler(
+            path, maxBytes=max_bytes, backupCount=backup_count
+        )
+
+    async def emit(self, records: Sequence[dict[str, Any]]) -> None:
+        for rec in records:
+            line = json.dumps({**rec, "service": "audit"}, separators=(",", ":"), default=str)
+            record = logging.LogRecord(
+                name="hyproxy.audit.file",
+                level=logging.INFO,
+                pathname=__file__,
+                lineno=0,
+                msg=line,
+                args=None,
+                exc_info=None,
+            )
+            self._handler.emit(record)
+        self._handler.flush()
 
 
 def _fmt_auth_event(row: AuthEvent) -> dict[str, Any]:

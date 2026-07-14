@@ -5,16 +5,22 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"hyproxy/dataplane/internal/accesslog"
 	"hyproxy/dataplane/internal/authz"
 	"hyproxy/dataplane/internal/config"
 	"hyproxy/dataplane/internal/httpsl"
 	"hyproxy/dataplane/internal/listener"
+	"hyproxy/dataplane/internal/logrotate"
 	"hyproxy/dataplane/internal/proxy"
 	"hyproxy/dataplane/internal/tlsconf"
 )
@@ -23,6 +29,8 @@ func main() {
 	configPath := flag.String("config", "config.json", "path to the data-plane config")
 	flag.Parse()
 
+	// Bootstrap stderr logger: the file destination lives in the config, so
+	// config-load errors can only go to stderr/journald.
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	cfg, err := config.Load(*configPath)
@@ -30,6 +38,12 @@ func main() {
 		log.Error("config", "err", err)
 		os.Exit(1)
 	}
+	log, accessLog, closeLogs, err := newLoggers(cfg)
+	if err != nil {
+		log.Error("logging", "err", err)
+		os.Exit(1)
+	}
+	defer closeLogs()
 	certs, err := tlsconf.NewCertReloader(cfg.TLSCert, cfg.TLSKey)
 	if err != nil {
 		log.Error("tls", "err", err)
@@ -42,7 +56,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	var l listener.Listener = httpsl.New(cfg.Listen, handler, certs)
+	var public http.Handler = handler
+	if accessLog != nil {
+		public = accesslog.Wrap(handler, accessLog)
+	}
+	var l listener.Listener = httpsl.New(cfg.Listen, public, certs)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -63,6 +81,63 @@ func main() {
 	if err := l.Serve(ctx); err != nil {
 		log.Error("serve", "err", err)
 		os.Exit(1)
+	}
+}
+
+// newLoggers builds the service logger and the access logger from the config.
+// Service log: stderr always (journald), plus rotating dataplane.log when
+// log_dir is set. Access log: rotating dataplane-access.log only (nil when
+// log_dir is unset; file-only because per-request lines at media-streaming
+// volume would drown journald). Both emit the stack-wide JSON scheme:
+// ts (RFC3339 UTC), level (lowercase), service, msg.
+func newLoggers(cfg *config.Config) (*slog.Logger, *slog.Logger, func(), error) {
+	opts := &slog.HandlerOptions{
+		Level: slogLevel(cfg.LogLevel),
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			switch a.Key {
+			case slog.TimeKey:
+				return slog.String("ts", a.Value.Time().UTC().Format(time.RFC3339))
+			case slog.LevelKey:
+				return slog.String("level", strings.ToLower(a.Value.String()))
+			}
+			return a
+		},
+	}
+	if cfg.LogDir == "" {
+		log := slog.New(slog.NewJSONHandler(os.Stderr, opts)).With("service", "dataplane")
+		return log, nil, func() {}, nil
+	}
+	serviceOut, err := logrotate.New(
+		filepath.Join(cfg.LogDir, "dataplane.log"), cfg.LogMaxBytes, cfg.LogBackupCount)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	accessOut, err := logrotate.New(
+		filepath.Join(cfg.LogDir, "dataplane-access.log"), cfg.LogMaxBytes, cfg.LogBackupCount)
+	if err != nil {
+		serviceOut.Close()
+		return nil, nil, nil, err
+	}
+	log := slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stderr, serviceOut), opts)).
+		With("service", "dataplane")
+	accessLog := slog.New(slog.NewJSONHandler(accessOut, opts)).With("service", "dataplane")
+	closeLogs := func() {
+		serviceOut.Close()
+		accessOut.Close()
+	}
+	return log, accessLog, closeLogs, nil
+}
+
+func slogLevel(s string) slog.Level {
+	switch s {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 

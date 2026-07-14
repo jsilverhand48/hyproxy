@@ -414,6 +414,15 @@ HYPROXY_TPM_PCRS=$HYPROXY_TPM_PCRS
 HYPROXY_TPM_DEVICE=/dev/tpmrm0
 TSS_GID=$TSS_GID
 EOF
+# Centralized logging: default the log dir on fresh AND reused .env files,
+# preserving an operator-customized value. The hyproxy group's gid lets the
+# tunnel container (runs as the node user, not uid 10001) join the group via
+# compose group_add and write the setgid log dir.
+grep -q '^HYPROXY_LOG_DIR=' "$HYPROXY_INSTALL_DIR/.env" \
+  || echo "HYPROXY_LOG_DIR=/var/log/hyproxy" >> "$HYPROXY_INSTALL_DIR/.env"
+HYPROXY_GID="$(getent group hyproxy | cut -d: -f3)"
+sed -i -e '/^HYPROXY_GID=/d' "$HYPROXY_INSTALL_DIR/.env"
+echo "HYPROXY_GID=$HYPROXY_GID" >> "$HYPROXY_INSTALL_DIR/.env"
 chown hyproxy:hyproxy "$HYPROXY_INSTALL_DIR/.env"
 chmod 600 "$HYPROXY_INSTALL_DIR/.env"
 
@@ -423,6 +432,15 @@ install -d -m 0755 /etc/hyproxy
 # owner-only, service-account owned so issuance/renewal never runs as root.
 install -d -m 0700 -o hyproxy -g hyproxy /etc/hyproxy/lego
 install -d -m 0755 -o hyproxy -g hyproxy /etc/hyproxy/certs
+
+# Centralized log dir. Owner uid 10001 is the control-plane container user
+# (server/Dockerfile); group hyproxy covers the baremetal dataplane and the
+# tunnel container (joined via compose group_add). Setgid keeps group
+# ownership on files each writer creates; each writer only rotates its own
+# files, so only directory write access matters.
+HYPROXY_LOG_DIR="$(sed -n 's/^HYPROXY_LOG_DIR=//p' "$HYPROXY_INSTALL_DIR/.env" | tail -n 1)"
+HYPROXY_LOG_DIR="${HYPROXY_LOG_DIR:-/var/log/hyproxy}"
+install -d -m 2775 -o 10001 -g hyproxy "$HYPROXY_LOG_DIR"
 
 # --- 5. Bootstrap (deps, firewall, images, migrate, admin, binary) -----------
 c_info "running bootstrap.sh"
@@ -473,6 +491,9 @@ case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
   true|1|yes) UPSTREAM_INSECURE=true ;;
   *) UPSTREAM_INSECURE=false ;;
 esac
+HYPROXY_LOG_DIR="${HYPROXY_LOG_DIR:-/var/log/hyproxy}"
+HYPROXY_LOG_MAX_BYTES="${HYPROXY_LOG_MAX_BYTES:-52428800}"
+DP_LOG_LEVEL="${DP_LOG_LEVEL:-info}"
 cat > "$DP_OUT" <<EOF
 {
   "listen": "$DP_LISTEN",
@@ -485,6 +506,10 @@ cat > "$DP_OUT" <<EOF
   "guac_backend": "$GUAC_BACKEND",
   "routes_refresh_secs": $ROUTES_REFRESH_SECS,
   "upstream_insecure_skip_verify": $UPSTREAM_INSECURE,
+  "log_dir": "$HYPROXY_LOG_DIR",
+  "log_level": "$DP_LOG_LEVEL",
+  "log_max_bytes": $HYPROXY_LOG_MAX_BYTES,
+  "log_backup_count": 2,
   "routes": {
     "idp.$HYPROXY_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
     "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
@@ -633,6 +658,10 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/etc/hyproxy/certs
+# The centralized log dir must stay writable under ProtectSystem=strict.
+# ReadWritePaths (not LogsDirectory=) so the configurable base dir is honored
+# and the shared dir's container-writable ownership is never chowned.
+ReadWritePaths=$HYPROXY_LOG_DIR
 PrivateTmp=true
 
 [Install]
@@ -670,9 +699,40 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+# Drain new audit rows (auth events, access decisions, policy changes) from
+# the DB into the centralized audit.log. Oneshot, driven by
+# hyproxy-ship-logs.timer; the cursor makes reruns at-least-once, never lossy.
+cat > /etc/systemd/system/hyproxy-ship-logs.service <<EOF
+[Unit]
+Description=hyproxy audit log shipping to $HYPROXY_LOG_DIR/audit.log
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=hyproxy
+Group=hyproxy
+WorkingDirectory=$HYPROXY_INSTALL_DIR
+ExecStart=/usr/bin/docker compose run --rm cli ship-logs --to-file
+EOF
+
+cat > /etc/systemd/system/hyproxy-ship-logs.timer <<'EOF'
+[Unit]
+Description=hyproxy audit log shipping (every 5 minutes)
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 chmod 0644 /etc/systemd/system/hyproxy-dataplane.service \
            /etc/systemd/system/hyproxy-acme.service \
-           /etc/systemd/system/hyproxy-acme.timer
+           /etc/systemd/system/hyproxy-acme.timer \
+           /etc/systemd/system/hyproxy-ship-logs.service \
+           /etc/systemd/system/hyproxy-ship-logs.timer
 systemctl daemon-reload
 
 # --- 9. Start the stack ------------------------------------------------------
@@ -693,9 +753,10 @@ if [ -n "$OLD_KEY_FILE" ]; then
   shred -u "$OLD_KEY_FILE"
 fi
 
-c_info "enabling + starting the data plane and renewal timer"
+c_info "enabling + starting the data plane, renewal timer, and log shipping timer"
 systemctl enable --now hyproxy-dataplane
 systemctl enable --now hyproxy-acme.timer
+systemctl enable --now hyproxy-ship-logs.timer
 
 # --- 10. Summary ---------------------------------------------------------------
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -707,6 +768,8 @@ hyproxy is installed at $HYPROXY_INSTALL_DIR and running.
   Public ingress : :443 (data plane, systemd 'hyproxy-dataplane')
   Control plane  : idp/admin/authz containers on 127.0.0.1
   Cert renewal   : hyproxy-acme.timer (daily, runs as 'hyproxy')
+  Logs           : $HYPROXY_LOG_DIR (JSON lines, 50 MB rotation, 2 archives kept;
+                   audit.log drained every 5 min by hyproxy-ship-logs.timer)
   Service user   : 'hyproxy' (nologin; owns $HYPROXY_INSTALL_DIR and runs the stack)
 
 NEXT STEPS (not automated):

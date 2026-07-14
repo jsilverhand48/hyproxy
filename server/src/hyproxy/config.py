@@ -124,6 +124,14 @@ class Settings(BaseSettings):
     guac_cypher_key: str = ""
     guac_grant_ttl: int = 60
 
+    # Centralized logging (see logs.py). log_dir empty = stderr only (dev);
+    # production sets /var/log/hyproxy. Rotation keeps log_backup_count
+    # archives (x.log.1, x.log.2) and deletes older ones.
+    log_dir: str = ""
+    log_level: str = "INFO"
+    log_max_bytes: int = 52428800  # 50 MB
+    log_backup_count: int = 2
+
     # Rate limiting
     throttle_window: int = 900
     throttle_account_free_failures: int = 3

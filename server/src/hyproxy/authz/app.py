@@ -16,9 +16,12 @@ from hyproxy.authz.gateway import router as gateway_router
 from hyproxy.authz.guac import router as guac_router
 from hyproxy.authz.routes import router as routes_router
 from hyproxy.config import get_settings
+from hyproxy.logs import setup_logging
 
 
 def create_app(idp_http: httpx.AsyncClient | None = None) -> FastAPI:
+    setup_logging("authz")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = get_settings()

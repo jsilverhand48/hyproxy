@@ -13,10 +13,12 @@ from hyproxy.admin.routes.policies import router as policies_router
 from hyproxy.admin.routes.portal import router as portal_router
 from hyproxy.admin.routes.resources import router as resources_router
 from hyproxy.admin.routes.roles import router as roles_router
+from hyproxy.admin.routes.ui_logs import router as ui_logs_router
 from hyproxy.admin.routes.user_roles import router as user_roles_router
 from hyproxy.admin.routes.users import router as users_router
 from hyproxy.admin.routes.viewers import router as viewers_router
 from hyproxy.config import SERVER_DIR, get_settings
+from hyproxy.logs import setup_logging
 
 
 def _idp_origin() -> str:
@@ -54,6 +56,7 @@ def create_app(qbit_http: httpx.AsyncClient | None = None) -> FastAPI:
     """Management-plane API + SPA. The management endpoints stay LAN/WireGuard
     only (docs/admin-access.md); the /api/v1/portal endpoints and the SPA are
     additionally served on the internet-facing portal host (portal_origin)."""
+    setup_logging("admin")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -92,6 +95,7 @@ def create_app(qbit_http: httpx.AsyncClient | None = None) -> FastAPI:
     app.include_router(policies_router)
     app.include_router(viewers_router)
     app.include_router(portal_router)
+    app.include_router(ui_logs_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

@@ -9,6 +9,10 @@
   "guac_backend": "http://127.0.0.1:8600",
   "routes_refresh_secs": 10,
   "lan_only_redirect": "https://idp.localhost:8443/auth/login",
+  "log_dir": "",
+  "log_level": "info",
+  "log_max_bytes": 52428800,
+  "log_backup_count": 2,
   "routes": {
     "idp.localhost": {
       "backend": "http://127.0.0.1:8300",

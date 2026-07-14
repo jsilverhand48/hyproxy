@@ -70,6 +70,19 @@ type Config struct {
 	// are sent, typically the IdP login page. Non-GET/HEAD requests and an
 	// empty value get a plain 403.
 	LanOnlyRedirect string `json:"lan_only_redirect,omitempty"`
+	// LogDir is the centralized log directory (e.g. "/var/log/hyproxy").
+	// When set, the data plane writes dataplane.log (service log, also still
+	// mirrored to stderr for journald) and dataplane-access.log (per-request
+	// access log, file only). Empty keeps stderr-only logging.
+	LogDir string `json:"log_dir,omitempty"`
+	// LogLevel is one of debug|info|warn|error. Empty means info.
+	LogLevel string `json:"log_level,omitempty"`
+	// LogMaxBytes rotates a log file once it reaches this size. Zero uses
+	// DefaultLogMaxBytes.
+	LogMaxBytes int64 `json:"log_max_bytes,omitempty"`
+	// LogBackupCount is how many rotated archives to keep (x.log.1 ... x.log.N);
+	// older archives are deleted. Zero uses DefaultLogBackupCount.
+	LogBackupCount int `json:"log_backup_count,omitempty"`
 	// UpstreamInsecureSkipVerify disables TLS certificate verification when the
 	// proxy dials https backends. Operator escape hatch for backends with
 	// self-signed or IP-only certs (e.g. Plex on a bare IP); it does NOT relax
@@ -80,6 +93,13 @@ type Config struct {
 
 // DefaultRoutesRefreshSecs is the DB-route poll interval when unset.
 const DefaultRoutesRefreshSecs = 10
+
+// Rotation defaults shared with the control plane (HYPROXY_LOG_MAX_BYTES /
+// HYPROXY_LOG_BACKUP_COUNT): 50 MB per file, 2 archives kept.
+const (
+	DefaultLogMaxBytes    = 52428800
+	DefaultLogBackupCount = 2
+)
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -113,6 +133,17 @@ func (c *Config) Validate() error {
 	}
 	if c.RoutesRefreshSecs == 0 {
 		c.RoutesRefreshSecs = DefaultRoutesRefreshSecs
+	}
+	switch c.LogLevel {
+	case "", "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("log_level must be debug|info|warn|error, got %q", c.LogLevel)
+	}
+	if c.LogMaxBytes == 0 {
+		c.LogMaxBytes = DefaultLogMaxBytes
+	}
+	if c.LogBackupCount == 0 {
+		c.LogBackupCount = DefaultLogBackupCount
 	}
 	if c.GuacBackend != "" {
 		if _, err := parseBackend(c.GuacBackend); err != nil {

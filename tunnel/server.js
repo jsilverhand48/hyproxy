@@ -12,11 +12,12 @@
 
 const http = require("http");
 const GuacamoleLite = require("guacamole-lite");
+const logger = require("./logger");
 
 function requiredEnv(name) {
   const value = process.env[name];
   if (!value) {
-    console.error(`missing required env ${name}`);
+    logger.error(`missing required env ${name}`);
     process.exit(1);
   }
   return value;
@@ -29,7 +30,7 @@ const host = process.env.BIND_HOST || "127.0.0.1";
 // raw bytes. It MUST equal the control plane's HYPROXY_GUAC_CYPHER_KEY.
 const key = Buffer.from(requiredEnv("GUAC_CYPHER_KEY"), "base64");
 if (key.length !== 32) {
-  console.error("GUAC_CYPHER_KEY must decode to 32 bytes");
+  logger.error("GUAC_CYPHER_KEY must decode to 32 bytes");
   process.exit(1);
 }
 
@@ -62,5 +63,10 @@ const server = http.createServer((req, res) => {
 new GuacamoleLite({ server }, guacdOptions, clientOptions);
 
 server.listen(port, host, () => {
-  console.log(`guac tunnel listening on ${host}:${port}, guacd ${guacdOptions.host}:${guacdOptions.port}`);
+  logger.info("guac tunnel listening", {
+    host,
+    port,
+    guacd_host: guacdOptions.host,
+    guacd_port: guacdOptions.port,
+  });
 });

@@ -13,6 +13,7 @@ from hyproxy.core import keys as key_service
 from hyproxy.core.secrets import generate_master_key_file, get_secrets_backend
 from hyproxy.db.engine import db_session
 from hyproxy.db.models import DpopJtiSeen, GuacGrant, LoginFlow, OAuthClient, User
+from hyproxy.logs import setup_logging
 
 
 def run_db[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -26,6 +27,7 @@ def run_db[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
 @click.group()
 def cli() -> None:
     """hyproxy management commands."""
+    setup_logging("cli")
 
 
 @cli.command("gen-keys")
@@ -211,15 +213,32 @@ def gen_guac_key() -> None:
 
 @cli.command("ship-logs")
 @click.option("--batch-size", default=500, show_default=True)
-def ship_logs(batch_size: int) -> None:
+@click.option(
+    "--to-file",
+    is_flag=True,
+    help="Write to <log_dir>/audit.log (rotating) instead of stdout.",
+)
+def ship_logs(batch_size: int, to_file: bool) -> None:
     """Ship new audit rows off-box as JSON lines on stdout (cron it).
 
     Pipe stdout to your syslog/OTLP forwarder; the per-stream cursor advances
     only after the batch is written, so a failed pipe re-ships (at-least-once).
-    The summary and high-severity count go to stderr."""
-    from hyproxy.audit.shipping import JsonLinesSink, ship
+    With --to-file the destination is the centralized audit.log under
+    HYPROXY_LOG_DIR. The summary and high-severity count go to stderr."""
+    from hyproxy.audit.shipping import JsonLinesSink, LogSink, RotatingFileSink, ship
 
-    sink = JsonLinesSink()
+    sink: LogSink
+    if to_file:
+        settings = get_settings()
+        if not settings.log_dir:
+            raise click.ClickException("--to-file requires HYPROXY_LOG_DIR to be set")
+        sink = RotatingFileSink(
+            Path(settings.log_dir) / "audit.log",
+            settings.log_max_bytes,
+            settings.log_backup_count,
+        )
+    else:
+        sink = JsonLinesSink()
 
     async def do(session: AsyncSession) -> Any:
         return await ship(session, sink, batch_size=batch_size)

@@ -6,6 +6,7 @@
 import { forceRefresh, getAccessToken } from "./auth";
 import { config } from "./config";
 import { loadDpopKey } from "./dpop";
+import { logError } from "./logger";
 
 export class StepUpRequired extends Error {
   constructor() {
@@ -48,11 +49,19 @@ async function detailOf(resp: Response): Promise<string> {
 
 export async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
   let token = await getAccessToken();
-  let resp = await send(method, path, body, token);
-
-  if (resp.status === 401 && (await forceRefresh())) {
-    token = await getAccessToken();
+  let resp: Response;
+  try {
     resp = await send(method, path, body, token);
+
+    if (resp.status === 401 && (await forceRefresh())) {
+      token = await getAccessToken();
+      resp = await send(method, path, body, token);
+    }
+  } catch (err) {
+    // Network-level failure; 4xx (auth, step-up, validation) are expected
+    // flows and not reported. Never log request bodies.
+    logError(`network error: ${method} ${path}`, err instanceof Error ? err.stack : undefined);
+    throw err;
   }
 
   if (resp.status === 403) {
@@ -60,7 +69,11 @@ export async function apiFetch<T>(method: string, path: string, body?: unknown):
     if (detail === "stepup_required") throw new StepUpRequired();
     throw new ApiError(403, detail);
   }
-  if (!resp.ok) throw new ApiError(resp.status, await detailOf(resp));
+  if (!resp.ok) {
+    const detail = await detailOf(resp);
+    if (resp.status >= 500) logError(`api error: ${method} ${path} -> ${resp.status} ${detail}`);
+    throw new ApiError(resp.status, detail);
+  }
   if (resp.status === 204) return undefined as T;
   return (await resp.json()) as T;
 }
