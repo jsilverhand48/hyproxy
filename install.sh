@@ -153,6 +153,7 @@ if [ "$REUSE_ENV" = yes ]; then
   set -a; . "$ENV_SRC"; set +a
   : "${HYPROXY_ISSUER:=https://idp.$HYPROXY_DOMAIN}"
   : "${HYPROXY_ADMIN_UI_ORIGIN:=https://admin.$HYPROXY_DOMAIN}"
+  : "${HYPROXY_APPS_UI_ORIGIN:=https://apps.$HYPROXY_DOMAIN}"
   case "${HYPROXY_ENABLE_GUAC:-no}" in [Yy]*|1|true) HYPROXY_ENABLE_GUAC=yes ;; *) HYPROXY_ENABLE_GUAC=no ;; esac
   PROVIDER_CREDS=""
   printf '  Domain:       %s\n' "$HYPROXY_DOMAIN"
@@ -167,6 +168,7 @@ prompt HYPROXY_DOMAIN "Base domain (public, e.g. example.com)"
 [ -n "$HYPROXY_DOMAIN" ] || c_die "a base domain is required"
 : "${HYPROXY_ISSUER:=https://idp.$HYPROXY_DOMAIN}"
 : "${HYPROXY_ADMIN_UI_ORIGIN:=https://admin.$HYPROXY_DOMAIN}"
+: "${HYPROXY_APPS_UI_ORIGIN:=https://apps.$HYPROXY_DOMAIN}"
 prompt ADMIN_EMAIL "Admin + ACME email" "admin@$HYPROXY_DOMAIN"
 prompt ADMIN_NAME  "Admin display name" "Admin"
 prompt LEGO_DNS_PROVIDER "lego DNS-01 provider code (e.g. godaddy, cloudflare, route53)"
@@ -202,6 +204,7 @@ c_info "review"
   printf '  Domain:          %s\n' "$HYPROXY_DOMAIN"
   printf '  Issuer:          %s\n' "$HYPROXY_ISSUER"
   printf '  Admin origin:    %s\n' "$HYPROXY_ADMIN_UI_ORIGIN"
+  printf '  Apps origin:     %s\n' "$HYPROXY_APPS_UI_ORIGIN"
   printf '  Admin:           %s <%s>\n' "$ADMIN_NAME" "$ADMIN_EMAIL"
   printf '  DNS provider:    %s\n' "$LEGO_DNS_PROVIDER"
   printf '  Service user:    hyproxy (system account, nologin)\n'
@@ -379,6 +382,7 @@ HYPROXY_DOMAIN=$HYPROXY_DOMAIN
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 HYPROXY_ISSUER=$HYPROXY_ISSUER
 HYPROXY_ADMIN_UI_ORIGIN=$HYPROXY_ADMIN_UI_ORIGIN
+HYPROXY_APPS_UI_ORIGIN=$HYPROXY_APPS_UI_ORIGIN
 # Secrets backend lines (HYPROXY_SECRETS_BACKEND etc.) are appended below,
 # outside this heredoc, so fresh and reused .env files get the same block.
 ADMIN_EMAIL=$ADMIN_EMAIL

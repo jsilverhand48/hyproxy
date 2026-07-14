@@ -182,6 +182,11 @@ require_var ADMIN_NAME
 case "$HYPROXY_ISSUER" in https://*) : ;; *) die "HYPROXY_ISSUER must be https:// in production" ;; esac
 [ "${POSTGRES_PASSWORD:-devonly}" = "devonly" ] && warn "POSTGRES_PASSWORD is the dev default; set a real one in .env before real use"
 ADMIN_UI_REDIRECT="${ADMIN_UI_REDIRECT:-${HYPROXY_ADMIN_UI_ORIGIN%/}/callback}"
+# The admin-ui SPA is also served as the portal on the apps.* host; it logs in
+# with the same client_id=admin-ui but derives its redirect_uri from its own
+# origin, so that callback must be a registered redirect_uri too.
+: "${HYPROXY_APPS_UI_ORIGIN:=https://apps.$HYPROXY_DOMAIN}"
+APPS_UI_REDIRECT="${APPS_UI_REDIRECT:-${HYPROXY_APPS_UI_ORIGIN%/}/callback}"
 
 # --- 1b. Host firewall (open the public data-plane port) ---------------------
 # The ingress is not started here, but the firewall is prepared so start-prod.sh
@@ -233,7 +238,8 @@ log "creating the first admin (or resetting its temporary password): $ADMIN_EMAI
 
 log "registering the admin-ui OIDC public client"
 "${COMPOSE[@]}" run --rm cli create-client \
-    --client-id admin-ui --name "Admin UI" --redirect-uri "$ADMIN_UI_REDIRECT" \
+    --client-id admin-ui --name "Admin UI" \
+    --redirect-uri "$ADMIN_UI_REDIRECT" --redirect-uri "$APPS_UI_REDIRECT" \
   || warn "admin-ui client already registered; continuing"
 
 log "registering the data plane forward-auth (gateway) OIDC client"
