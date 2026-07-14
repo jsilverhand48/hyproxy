@@ -79,6 +79,10 @@ def bootstrap_keys() -> None:
 def bootstrap_admin(email: str, display_name: str) -> None:
     """Create the first admin user with a one-time temporary password.
 
+    Idempotent with reset semantics: re-running for an existing email keeps the
+    account but sets a fresh temporary password, so every installer pass leaves
+    the break-glass admin with a known-once credential.
+
     The admin must enroll at least two WebAuthn credentials before real use;
     print the enrollment entry point.
     """
@@ -90,7 +94,12 @@ def bootstrap_admin(email: str, display_name: str) -> None:
     temp_password = _secrets.token_urlsafe(16)
     password_hash = hash_password(temp_password)
 
-    async def do(session: AsyncSession) -> None:
+    async def do(session: AsyncSession) -> bool:
+        existing = await session.scalar(select(User).where(User.email == email))
+        if existing is not None:
+            existing.password_hash = password_hash
+            existing.updated_at = datetime.now(UTC)
+            return False
         session.add(
             User(
                 external_id=f"user-{_uuid.uuid4()}",
@@ -102,9 +111,13 @@ def bootstrap_admin(email: str, display_name: str) -> None:
                 is_protected=True,
             )
         )
+        return True
 
-    run_db(do)
-    click.echo(f"created admin {email}")
+    created = run_db(do)
+    if created:
+        click.echo(f"created admin {email}")
+    else:
+        click.echo(f"admin {email} already exists; temporary password reset")
     click.echo(f"temporary password (shown once): {temp_password}")
     click.echo("next: sign in at /auth/login and enroll two passkeys at /auth/enroll/webauthn")
 

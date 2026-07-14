@@ -227,9 +227,9 @@ log "applying migrations"
 log "ensuring signing keys exist (published in JWKS)"
 "${COMPOSE[@]}" run --rm cli bootstrap-keys
 
-log "creating the first admin: $ADMIN_EMAIL"
+log "creating the first admin (or resetting its temporary password): $ADMIN_EMAIL"
 "${COMPOSE[@]}" run --rm cli bootstrap-admin --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" \
-  || warn "bootstrap-admin reported an error (admin may already exist); continuing"
+  || warn "bootstrap-admin reported an error; continuing"
 
 log "registering the admin-ui OIDC public client"
 "${COMPOSE[@]}" run --rm cli create-client \

@@ -21,8 +21,11 @@
 #   - writes a single service-account-owned .env (0600) with everything the
 #     stack needs, including the ACME DNS-01 provider credentials,
 #   - runs bootstrap.sh (installs deps, opens the firewall, builds images,
-#     migrates, creates the first admin, builds the data-plane binary),
-#   - issues the Let's Encrypt wildcard cert via lego DNS-01,
+#     migrates, creates the first admin, builds the data-plane binary); on a
+#     re-run the break-glass admin gets a FRESH one-time temporary password,
+#   - issues the Let's Encrypt wildcard cert via lego DNS-01 (no wait on DNS
+#     propagation: the challenge record is assumed applied and Let's Encrypt
+#     validates from its own resolvers),
 #   - installs and enables the systemd units (data plane + renewal timer),
 #   - brings up the control plane and starts the data plane.
 #
@@ -546,7 +549,12 @@ server_args=()
 
 common=(--accept-tos --email "$ACME_EMAIL" --dns "$LEGO_DNS_PROVIDER"
         --domains "*.$HYPROXY_DOMAIN" --domains "$HYPROXY_DOMAIN"
-        --path "$LEGO_PATH" "${server_args[@]}")
+        --path "$LEGO_PATH"
+        # Skip lego's local propagation self-check on the TXT challenge record:
+        # assume the provider applied it and move straight to validation.
+        # Let's Encrypt checks from its own resolvers regardless.
+        --dns.propagation-disable-ans
+        "${server_args[@]}")
 
 mode="${1:-auto}"
 # lego stores the wildcard cert under a sanitized name: *. -> _.
@@ -703,7 +711,7 @@ NEXT STEPS (not automated):
 $(if [ -n "$ADMIN_TEMP_PW" ]; then
     printf '\n     ADMIN ONE-TIME PASSWORD for %s (shown once; save it NOW):\n         %s\n' "$ADMIN_EMAIL" "$ADMIN_TEMP_PW"
   else
-    printf '\n     (no new admin was created this run: the account already existed,\n     so use the password from the run that created it)\n'
+    printf '\n     (could not capture the one-time password from the bootstrap output;\n     look for the "temporary password (shown once)" line above. Every run\n     resets the break-glass admin to a fresh temporary password.)\n'
   fi)
   3. Work through docs/production-checklist.md before internet exposure:
      WireGuard admin access, backend TLS verification, off-box logging, and
