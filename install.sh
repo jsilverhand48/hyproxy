@@ -32,12 +32,21 @@
 # sealed blob, all sealed data is re-wrapped to a fresh key, and the on-disk
 # key file is destroyed.
 #
+# An existing sealed blob is kept only after it VERIFIABLY unseals to
+# master-key material under the PCR policy. On a fresh image the configured
+# handle may hold a foreign object from a different setup; that object is left
+# untouched and the new key is sealed to the next free persistent handle,
+# which is recorded in .env (HYPROXY_TPM_SEALED_BLOB). A sealed object that
+# no longer unseals (PCR drift) fails closed; see docs/TPM_STEPS.md, or set
+# HYPROXY_TPM_FORCE_RESEAL=1 to discard it and seal a brand-new key.
+#
 # It deliberately does NOT do: WireGuard admin access, your public DNS records,
 # or the final security review. Those remain manual; see
 # docs/production-checklist.md.
 #
 # Overridable via environment:
-#   HYPROXY_REPO_URL, HYPROXY_REPO_BRANCH, HYPROXY_INSTALL_DIR, HYPROXY_RUN_GATES
+#   HYPROXY_REPO_URL, HYPROXY_REPO_BRANCH, HYPROXY_INSTALL_DIR, HYPROXY_RUN_GATES,
+#   HYPROXY_TPM_FORCE_RESEAL
 
 set -eu
 
@@ -247,10 +256,59 @@ if [ -z "$OLD_KEY_FILE" ] && [ "${HYPROXY_SECRETS_BACKEND:-file}" != tpm ] \
   OLD_KEY_FILE="$HYPROXY_INSTALL_DIR/server/.dev/master.keys"
 fi
 
+# An existing blob is trusted only after a full unseal round-trip: the handle
+# must unseal under the PCR policy AND yield master-key lines. tpm2_readpublic
+# alone is not enough: a fresh image can carry a foreign object (another
+# application's key, or a blob from a different setup) at the configured
+# handle, and treating it as ours leaves the stack with no usable secret.
+blob_unseals() {  # blob_unseals HANDLE: payload parses as master-key lines
+  tpm2_unseal -c "$1" -p "pcr:$HYPROXY_TPM_PCRS" 2>/dev/null \
+    | grep -q '^mk-[0-9][0-9]*:'
+}
+
+handle_in_use() { tpm2_readpublic -c "$1" >/dev/null 2>&1; }
+
+find_free_handle() {  # first unoccupied persistent handle at/after the configured one
+  _used=" $(tpm2_getcap handles-persistent 2>/dev/null | sed -n 's/^-[[:space:]]*//p' | tr '\n' ' ') "
+  _h=$(printf '%d' "$HYPROXY_TPM_SEALED_BLOB")
+  _end=$((_h + 32))
+  while [ "$_h" -le "$_end" ]; do
+    _cand="$(printf '0x%08x' "$_h")"
+    case "$_used" in
+      *" $_cand "*) _h=$((_h + 1)) ;;
+      *) printf '%s' "$_cand"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
 if [ "$REUSE_ENV" = yes ] && [ "${HYPROXY_SECRETS_BACKEND:-}" = tpm ] && [ -z "$OLD_KEY_FILE" ] \
-   && tpm2_readpublic -c "$HYPROXY_TPM_SEALED_BLOB" >/dev/null 2>&1; then
-  c_info "master key already sealed in the TPM at $HYPROXY_TPM_SEALED_BLOB (keeping it)"
+   && blob_unseals "$HYPROXY_TPM_SEALED_BLOB"; then
+  c_info "master key already sealed in the TPM at $HYPROXY_TPM_SEALED_BLOB (unseal verified; keeping it)"
 else
+  # A new key is about to be sealed. If the configured handle is occupied by
+  # an object that is not a usable hyproxy blob, never destroy it:
+  #   - a keyedhash that no longer unseals may be an older hyproxy master key
+  #     whose PCR state drifted -> fail closed (docs/TPM_STEPS.md), unless
+  #     HYPROXY_TPM_FORCE_RESEAL=1 explicitly discards it;
+  #   - anything else is a foreign object from a different setup -> leave it
+  #     intact and seal to the next free handle instead (recorded in .env).
+  if handle_in_use "$HYPROXY_TPM_SEALED_BLOB" && ! blob_unseals "$HYPROXY_TPM_SEALED_BLOB"; then
+    if [ "${HYPROXY_TPM_FORCE_RESEAL:-0}" = 1 ]; then
+      c_warn "HYPROXY_TPM_FORCE_RESEAL=1: discarding the object at $HYPROXY_TPM_SEALED_BLOB"
+      tpm2_evictcontrol -C o -c "$HYPROXY_TPM_SEALED_BLOB" >/dev/null
+    elif tpm2_readpublic -c "$HYPROXY_TPM_SEALED_BLOB" 2>/dev/null | grep -q keyedhash; then
+      c_die "handle $HYPROXY_TPM_SEALED_BLOB holds a sealed object that does not unseal under pcr:$HYPROXY_TPM_PCRS.
+       If it is an earlier hyproxy master key, the PCR state has drifted: reseal it per
+       docs/TPM_STEPS.md. To discard it and seal a NEW key (any data sealed under it
+       becomes unrecoverable), re-run with HYPROXY_TPM_FORCE_RESEAL=1."
+    else
+      c_warn "handle $HYPROXY_TPM_SEALED_BLOB holds a foreign (non-hyproxy) object; leaving it untouched"
+      HYPROXY_TPM_SEALED_BLOB="$(find_free_handle)" \
+        || c_die "no free persistent handle found near the configured one"
+      c_info "using free persistent handle $HYPROXY_TPM_SEALED_BLOB instead (will be recorded in .env)"
+    fi
+  fi
   c_info "sealing the master key into the TPM (handle $HYPROXY_TPM_SEALED_BLOB, policy $HYPROXY_TPM_PCRS)"
   SEAL_DIR="$(mktemp -d /dev/shm/hyproxy-seal.XXXXXX)"   # tmpfs: never hits disk
   PLAIN="$SEAL_DIR/master.keys"
@@ -366,9 +424,19 @@ install -d -m 0755 -o hyproxy -g hyproxy /etc/hyproxy/certs
 c_info "running bootstrap.sh"
 c_warn "SAVE the admin one-time password printed below; it is shown only once."
 SKIP_GATES=1; [ "${HYPROXY_RUN_GATES:-0}" = "1" ] && SKIP_GATES=0
-HYPROXY_ASSUME_YES=1 SKIP_GATES="$SKIP_GATES" \
-  ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_NAME="$ADMIN_NAME" \
-  bash "$HYPROXY_INSTALL_DIR/bootstrap.sh"
+# Bootstrap output is teed through tmpfs (never disk) so the admin one-time
+# password can be re-printed in the final summary instead of scrolling away.
+BOOT_LOG="$(mktemp /dev/shm/hyproxy-boot.XXXXXX)"
+( set +e
+  HYPROXY_ASSUME_YES=1 SKIP_GATES="$SKIP_GATES" \
+    ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_NAME="$ADMIN_NAME" \
+    bash "$HYPROXY_INSTALL_DIR/bootstrap.sh" 2>&1
+  echo "$?" > "$BOOT_LOG.rc"
+) | tee "$BOOT_LOG"
+BOOT_RC="$(cat "$BOOT_LOG.rc" 2>/dev/null || echo 1)"
+ADMIN_TEMP_PW="$(sed -n 's/^temporary password (shown once): //p' "$BOOT_LOG" | tail -n 1)"
+rm -f "$BOOT_LOG" "$BOOT_LOG.rc"
+[ "$BOOT_RC" = 0 ] || c_die "bootstrap.sh failed (exit $BOOT_RC; see output above)"
 
 # From here on the service account drives docker compose. runuser does a fresh
 # initgroups, so the new membership applies immediately, no re-login needed.
@@ -630,8 +698,13 @@ NEXT STEPS (not automated):
   1. Public DNS: point idp.$HYPROXY_DOMAIN, admin.$HYPROXY_DOMAIN, auth.$HYPROXY_DOMAIN (and each app
      host) at this server's public IP${IP:+ ($IP)}.
   2. First login at https://idp.$HYPROXY_DOMAIN/auth/login as $ADMIN_EMAIL with the
-     one-time password printed by bootstrap above; enroll two passkeys at
+     one-time password${ADMIN_TEMP_PW:+ shown below}; enroll two passkeys at
      /auth/enroll/webauthn.
+$(if [ -n "$ADMIN_TEMP_PW" ]; then
+    printf '\n     ADMIN ONE-TIME PASSWORD for %s (shown once; save it NOW):\n         %s\n' "$ADMIN_EMAIL" "$ADMIN_TEMP_PW"
+  else
+    printf '\n     (no new admin was created this run: the account already existed,\n     so use the password from the run that created it)\n'
+  fi)
   3. Work through docs/production-checklist.md before internet exposure:
      WireGuard admin access, backend TLS verification, off-box logging, and
      the security review.
