@@ -55,6 +55,7 @@ func main() {
 		log.Error("proxy", "err", err)
 		os.Exit(1)
 	}
+	defer handler.Close()
 
 	var public http.Handler = handler
 	if accessLog != nil {

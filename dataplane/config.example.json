@@ -13,6 +13,26 @@
   "log_level": "info",
   "log_max_bytes": 52428800,
   "log_backup_count": 2,
+  "blocked_user_agents": [
+    "(?i)(bot|crawler|spider|scrapy)",
+    "(?i)(curl|wget|python-requests|go-http-client|libwww-perl)"
+  ],
+  "block_empty_user_agent": false,
+  "blocked_ptr_suffixes": [
+    "amazonaws.com",
+    "googleusercontent.com",
+    "cloudfront.net",
+    "digitalocean.com",
+    "linode.com",
+    "ovh.net",
+    "your-server.de"
+  ],
+  "block_any_resolvable_ptr": false,
+  "blocked_asns": [],
+  "blocked_countries": [],
+  "geoip_asn_db": "",
+  "geoip_country_db": "",
+  "botfilter_cache_ttl_secs": 300,
   "routes": {
     "idp.localhost": {
       "backend": "http://127.0.0.1:8300",

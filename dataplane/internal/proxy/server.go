@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"hyproxy/dataplane/internal/authz"
+	"hyproxy/dataplane/internal/botfilter"
 	"hyproxy/dataplane/internal/config"
 	"hyproxy/dataplane/internal/routing"
 )
@@ -72,6 +73,10 @@ type Server struct {
 	// streaming (see newUpstreamTransport). TLS verification is disabled
 	// only when upstream_insecure_skip_verify is set.
 	transport http.RoundTripper
+	// botFilter drops robot/bot traffic (bad User-Agent, cloud/hosting source
+	// networks) at the top of ServeHTTP. Nil when no bot-filter signal is
+	// configured, in which case the check is skipped entirely.
+	botFilter *botfilter.Filter
 }
 
 func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Server, error) {
@@ -87,6 +92,13 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 	if err != nil {
 		return nil, err
 	}
+	bf, err := botfilter.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if bf != nil {
+		log.Info("bot filter enabled")
+	}
 	s := &Server{
 		authz:           checker,
 		cookieName:      cfg.GatewayCookieName,
@@ -99,6 +111,7 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		lanNets:         lanNets,
 		lanOnlyRedirect: cfg.LanOnlyRedirect,
 		transport:       transport,
+		botFilter:       bf,
 	}
 	// Initial snapshot: static infra routes only. The management plane
 	// (idp/admin) is reachable even if the control plane is down at boot; DB
@@ -301,7 +314,24 @@ func (s *Server) gatewayCookie(r *http.Request) string {
 	return value
 }
 
+// Close releases resources held by the Server (currently the bot filter's
+// MaxMind readers). Call once on shutdown.
+func (s *Server) Close() error {
+	return s.botFilter.Close()
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Bot/robot filter before any routing or authz work: covers every host
+	// (app, auth, and unknown) and spends nothing on traffic we drop. A blocked
+	// request has its connection closed with no response via ErrAbortHandler.
+	if s.botFilter != nil {
+		if blocked, reason := s.botFilter.Decide(clientIP(r), r.UserAgent()); blocked {
+			s.log.Info("bot_filter drop", "host", r.Host, "source_ip", clientIP(r),
+				"reason", reason, "user_agent", r.UserAgent())
+			panic(http.ErrAbortHandler)
+		}
+	}
+
 	rs := s.routes.Load()
 	route, host, kind := rs.table.Lookup(r.Host)
 	switch kind {

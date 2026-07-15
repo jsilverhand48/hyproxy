@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -89,6 +90,38 @@ type Config struct {
 	// the public listener's TLS or the SSRF allowlist. Leave false in any
 	// setting where upstream traffic can be tampered with.
 	UpstreamInsecureSkipVerify bool `json:"upstream_insecure_skip_verify,omitempty"`
+
+	// --- Bot / robot traffic filter (dropped at the edge before routing) ---
+
+	// BlockedUserAgents are regular expressions matched against the request
+	// User-Agent header; any match drops the connection. Compiled at startup.
+	BlockedUserAgents []string `json:"blocked_user_agents,omitempty"`
+	// BlockEmptyUserAgent drops requests that carry no User-Agent header.
+	BlockEmptyUserAgent bool `json:"block_empty_user_agent,omitempty"`
+	// BlockedASNs are autonomous system numbers (typically cloud/hosting
+	// providers) to drop. Requires GeoIPASNDB.
+	BlockedASNs []uint `json:"blocked_asns,omitempty"`
+	// BlockedPTRSuffixes are reverse-DNS hostname suffixes (e.g.
+	// "amazonaws.com") whose IPs are dropped: an IP that resolves to a hosting
+	// domain is almost never a residential client.
+	BlockedPTRSuffixes []string `json:"blocked_ptr_suffixes,omitempty"`
+	// BlockAnyResolvablePTR is the aggressive mode: drop ANY source IP that
+	// returns a PTR record at all. Caveat: many residential ISPs also assign
+	// PTRs (comcast.net, rr.com, ...), so this over-blocks real users. Off by
+	// default; prefer BlockedPTRSuffixes.
+	BlockAnyResolvablePTR bool `json:"block_any_resolvable_ptr,omitempty"`
+	// BlockedCountries are ISO 3166-1 alpha-2 country codes to drop by
+	// IP geolocation. Requires GeoIPCountryDB.
+	BlockedCountries []string `json:"blocked_countries,omitempty"`
+	// GeoIPASNDB is the path to a MaxMind GeoLite2-ASN .mmdb. Required when
+	// BlockedASNs is non-empty.
+	GeoIPASNDB string `json:"geoip_asn_db,omitempty"`
+	// GeoIPCountryDB is the path to a MaxMind GeoLite2-Country .mmdb. Required
+	// when BlockedCountries is non-empty.
+	GeoIPCountryDB string `json:"geoip_country_db,omitempty"`
+	// BotFilterCacheTTLSecs is how long a per-source-IP verdict (ASN/geo/PTR) is
+	// cached. Zero uses DefaultBotFilterCacheTTLSecs.
+	BotFilterCacheTTLSecs int `json:"botfilter_cache_ttl_secs,omitempty"`
 }
 
 // DefaultRoutesRefreshSecs is the DB-route poll interval when unset.
@@ -100,6 +133,10 @@ const (
 	DefaultLogMaxBytes    = 52428800
 	DefaultLogBackupCount = 2
 )
+
+// DefaultBotFilterCacheTTLSecs is the per-source-IP verdict cache lifetime when
+// unset (5 minutes: ASN/geo/PTR of an IP are stable over that window).
+const DefaultBotFilterCacheTTLSecs = 300
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -187,6 +224,53 @@ func (c *Config) Validate() error {
 		normalized[h] = route
 	}
 	c.Routes = normalized
+	if err := c.validateBotFilter(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateBotFilter checks the bot-filter config: user-agent patterns must
+// compile, country codes must be alpha-2, and a MaxMind database path is
+// required (and must exist) whenever its corresponding block list is used.
+func (c *Config) validateBotFilter() error {
+	for _, pat := range c.BlockedUserAgents {
+		if _, err := regexp.Compile(pat); err != nil {
+			return fmt.Errorf("blocked_user_agents: bad pattern %q: %w", pat, err)
+		}
+	}
+	normCountries := make([]string, 0, len(c.BlockedCountries))
+	for _, code := range c.BlockedCountries {
+		code = strings.ToUpper(strings.TrimSpace(code))
+		if len(code) != 2 {
+			return fmt.Errorf("blocked_countries: %q is not a 2-letter ISO code", code)
+		}
+		normCountries = append(normCountries, code)
+	}
+	c.BlockedCountries = normCountries
+	if len(c.BlockedASNs) > 0 {
+		if err := statMMDB("geoip_asn_db", c.GeoIPASNDB); err != nil {
+			return err
+		}
+	}
+	if len(c.BlockedCountries) > 0 {
+		if err := statMMDB("geoip_country_db", c.GeoIPCountryDB); err != nil {
+			return err
+		}
+	}
+	if c.BotFilterCacheTTLSecs == 0 {
+		c.BotFilterCacheTTLSecs = DefaultBotFilterCacheTTLSecs
+	}
+	return nil
+}
+
+func statMMDB(field, path string) error {
+	if path == "" {
+		return fmt.Errorf("%s is required when its block list is non-empty", field)
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
 	return nil
 }
 
