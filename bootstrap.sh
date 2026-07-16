@@ -261,6 +261,11 @@ else
 fi
 
 # --- 6. Baremetal data plane -------------------------------------------------
+# The repo is owned by the hyproxy service account but bootstrap runs as root,
+# so git refuses to stamp VCS info ("dubious ownership") and `go build` fails.
+# Mark the tree safe for the building user; idempotent across reruns.
+git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$ROOT" \
+  || git config --global --add safe.directory "$ROOT"
 log "building the baremetal Go data plane binary"
 make -C "$ROOT" dp-build
 [ -f "$ROOT/dataplane/config.json" ] \
