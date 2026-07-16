@@ -331,6 +331,9 @@ th {
 .theme-crypt .cobweb-tr { right: 0; transform: scaleX(-1); }
 
 /* sidebar as a crypt wall */
+.layout.theme-crypt {
+  grid-template-rows: auto 1fr;
+}
 .theme-crypt .sidebar {
   background: linear-gradient(#0d100d, #060706);
   border-right: 1px solid var(--line);
