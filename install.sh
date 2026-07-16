@@ -270,7 +270,17 @@ fi
 # handle, and treating it as ours leaves the stack with no usable secret.
 blob_unseals() {  # blob_unseals HANDLE: payload parses as master-key lines
   tpm2_unseal -c "$1" -p "pcr:$HYPROXY_TPM_PCRS" 2>/dev/null \
-    | grep -q '^mk-[0-9][0-9]*:'
+    | grep -q '^mk-[0-9]'
+}
+
+# master_key_fp_of: read master-key lines on stdin, print the fingerprint of the
+# CURRENT (last) key: first 16 hex of sha256 over the raw 32-byte key. MUST match
+# core/secrets.py:master_key_fingerprint so the app's startup guard agrees. This
+# non-secret value is recorded in .env (HYPROXY_MASTER_KEY_FP); the raw key is
+# only ever piped in-memory here, never written.
+master_key_fp_of() {
+  grep -v '^[[:space:]]*#' | grep . | tail -n1 | cut -d: -f2- \
+    | openssl base64 -d -A | openssl dgst -sha256 -r | cut -c1-16
 }
 
 handle_in_use() { tpm2_readpublic -c "$1" >/dev/null 2>&1; }
@@ -289,10 +299,15 @@ find_free_handle() {  # first unoccupied persistent handle at/after the configur
   return 1
 }
 
+NEW_KEY_SEALED=no
 if [ "$REUSE_ENV" = yes ] && [ "${HYPROXY_SECRETS_BACKEND:-}" = tpm ] && [ -z "$OLD_KEY_FILE" ] \
    && blob_unseals "$HYPROXY_TPM_SEALED_BLOB"; then
   c_info "master key already sealed in the TPM at $HYPROXY_TPM_SEALED_BLOB (unseal verified; keeping it)"
+  # Record the kept key's fingerprint so .env pins the key the database is
+  # already encrypted under (idempotent: same blob -> same fingerprint).
+  MASTER_KEY_FP="$(tpm2_unseal -c "$HYPROXY_TPM_SEALED_BLOB" -p "pcr:$HYPROXY_TPM_PCRS" | master_key_fp_of)"
 else
+  NEW_KEY_SEALED=yes
   # A new key is about to be sealed. If the configured handle is occupied by
   # an object that is not a usable hyproxy blob, never destroy it:
   #   - a keyedhash that no longer unseals may be an older hyproxy master key
@@ -328,7 +343,11 @@ else
     _n=$(($(grep -c . "$PLAIN") + 1))
     while grep -q "^mk-$_n:" "$PLAIN"; do _n=$((_n + 1)); done
   fi
-  printf 'mk-%s:%s\n' "$_n" "$(openssl rand -base64 32)" >> "$PLAIN"
+  # Random suffix makes the id globally unique: a fresh seal can never reuse an
+  # earlier id (e.g. a second 'mk-1' with different bytes) and silently shadow
+  # ciphertext still wrapped under the original. See core/secrets.py.
+  printf 'mk-%s-%s:%s\n' "$_n" "$(openssl rand -hex 4)" "$(openssl rand -base64 32)" >> "$PLAIN"
+  MASTER_KEY_FP="$(master_key_fp_of < "$PLAIN")"
 
   tpm2_createprimary -C o -g sha256 -G ecc -c "$SEAL_DIR/primary.ctx" >/dev/null
   tpm2_startauthsession -S "$SEAL_DIR/session.dat"
@@ -408,14 +427,19 @@ fi
 # lines with the canonical TPM block.
 sed -i -e '/^HYPROXY_SECRETS_BACKEND=/d' -e '/^HYPROXY_MASTER_KEY_FILE=/d' \
        -e '/^HYPROXY_TPM_SEALED_BLOB=/d' -e '/^HYPROXY_TPM_PCRS=/d' \
-       -e '/^HYPROXY_TPM_DEVICE=/d' \
+       -e '/^HYPROXY_TPM_DEVICE=/d' -e '/^HYPROXY_MASTER_KEY_FP=/d' \
        -e '/^TSS_GID=/d' -e '/^COMPOSE_FILE=/d' "$HYPROXY_INSTALL_DIR/.env"
+[ -n "${MASTER_KEY_FP:-}" ] || c_die "internal: master key fingerprint not computed before writing .env"
 cat >> "$HYPROXY_INSTALL_DIR/.env" <<EOF
 HYPROXY_SECRETS_BACKEND=tpm
 HYPROXY_MASTER_KEY_FILE=/dev/null
 HYPROXY_TPM_SEALED_BLOB=$HYPROXY_TPM_SEALED_BLOB
 HYPROXY_TPM_PCRS=$HYPROXY_TPM_PCRS
 HYPROXY_TPM_DEVICE=/dev/tpmrm0
+# Fingerprint (sha256[:16]) of the current master key. The control plane fails
+# closed at startup if the unsealed key does not match this, catching a reseal
+# or blob swap without a re-wrap before it becomes a runtime decrypt failure.
+HYPROXY_MASTER_KEY_FP=$MASTER_KEY_FP
 TSS_GID=$TSS_GID
 EOF
 # Centralized logging: default the log dir on fresh AND reused .env files,
@@ -746,13 +770,23 @@ PROFILES="--profile app"
 # shellcheck disable=SC2086
 runuser -u hyproxy -- docker compose $PROFILES up -d --wait
 
-# File-backend migration epilogue: with the stack up on the TPM backend (old
-# key still in the blob), re-wrap every sealed secret to the new current key,
-# then destroy the on-disk key. Invariant: no unsealed master-key material on
-# disk in production.
+# Whenever a NEW master key became current (file->TPM migration, or any reseal),
+# re-wrap every sealed secret to it now that the stack is up. This also fails the
+# install closed if the database was encrypted under a key the new blob does not
+# contain: rotate-master-key decrypts each row first, so an orphaned reseal (old
+# key discarded/foreign, e.g. FORCE_RESEAL or a handle walk) surfaces here as a
+# hard error instead of a later runtime InvalidTag. On a fresh install every row
+# is already under the current key, so this is a no-op.
+if [ -n "$OLD_KEY_FILE" ] || [ "$NEW_KEY_SEALED" = yes ]; then
+  c_info "re-wrapping all sealed secrets to the current TPM master key"
+  runuser -u hyproxy -- docker compose run --rm cli rotate-master-key \
+    || c_die "re-wrap failed: the database holds ciphertext that the newly sealed
+     master key cannot decrypt. The key it was encrypted under is not in this blob
+     (an orphaned reseal). Restore the original key from the FIPS backup and reseal
+     under the current PCR policy (docs/TPM_STEPS.md) before retrying."
+fi
 if [ -n "$OLD_KEY_FILE" ]; then
-  c_info "re-wrapping all sealed secrets to the new TPM master key"
-  runuser -u hyproxy -- docker compose run --rm cli rotate-master-key
+  # Invariant: no unsealed master-key material on disk in production.
   c_info "destroying the on-disk file master key ($OLD_KEY_FILE)"
   shred -u "$OLD_KEY_FILE"
 fi

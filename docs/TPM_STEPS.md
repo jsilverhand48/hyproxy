@@ -159,11 +159,40 @@ python -m hyproxy.cli rotate-master-key        # or: make rotate-master-key
 shred -u /etc/hyproxy/master.keys
 ```
 
+## Master-key fingerprint guard (reseal safety)
+
+Two different keys can share a label (a second `mk-1` with fresh bytes), so a
+label alone cannot tell them apart. A reseal that mints a new key under an old
+label leaves the database encrypted under bytes the blob no longer holds, and
+every decrypt then raises AES-GCM `InvalidTag` at request time (a 500, deep in
+`/oidc/token`). Two mechanisms make that fail closed instead:
+
+- `HYPROXY_MASTER_KEY_FP` in `.env` records `sha256(key)[:16]` of the current
+  master key (written by `install.sh` on every seal/keep). At startup the
+  control plane refuses to run if the unsealed key does not match it, catching a
+  blob that was resealed or swapped **without** re-wrapping the data.
+- `install.sh` re-wraps all sealed rows to the new key after any reseal
+  (`rotate-master-key`). Because that decrypts every row first, a reseal that
+  orphaned the data (old key discarded via `HYPROXY_TPM_FORCE_RESEAL=1`, a
+  foreign-object handle walk, or PCR drift) aborts the install with a hard error
+  rather than shipping a box that cannot decrypt its own database.
+
+Recovery when the guard fires: restore the original key from the FIPS backup
+printout, reseal it under the current PCR policy (Part 2 below), and restart. If
+the original key is truly lost, data sealed under it is unrecoverable; new keys
+must be bootstrapped and the affected secrets re-enrolled.
+
+Newly generated ids carry a random suffix (`mk-<n>-<rand>`) so a fresh key can
+never reuse an earlier id in the first place.
+
 ## Verification
 
 - On a TPM host, every envelope decrypt succeeds under the TPM backend (login
   with TOTP, existing connections resolve their secrets).
 - `HYPROXY_SECRETS_BACKEND=tpm` and no `master.keys` file remains on disk.
+- `HYPROXY_MASTER_KEY_FP` in `.env` equals `tpm2_unseal ... | tail -1 | cut -d:
+  -f2- | openssl base64 -d -A | openssl dgst -sha256 -r | cut -c1-16`; the
+  control plane starts (fingerprint matches) rather than failing closed.
 - Rebooting into a changed firmware/kernel state (if bound in the PCR policy)
   makes `tpm2_unseal` fail closed; document the reseal procedure for planned
   updates.

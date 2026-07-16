@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # PCR selection the blob was sealed under. MUST match sealing time exactly
     # (tpm2_unseal re-satisfies the policy with it); see docs/TPM_STEPS.md.
     tpm_pcrs: str = "sha256:0,2,4,7"
+    # Fingerprint (sha256[:16]) of the master key the database is encrypted
+    # under, recorded by install.sh. When set, startup fails closed if the
+    # unsealed key does not match, catching a reseal/swap without re-wrap before
+    # it becomes a runtime InvalidTag. Empty disables the check. See secrets.py.
+    master_key_fp: str = ""
 
     @field_validator("db_url")
     @classmethod
