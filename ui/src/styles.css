@@ -302,6 +302,8 @@ th {
   color: #9be58f;
   font-family: "Chiller", "Papyrus", "Impact", fantasy;
   letter-spacing: 1px;
+  font-size: 14px;
+  line-height: 24px;
   padding: 4px 0;
   text-shadow: 0 0 6px rgba(121, 217, 112, 0.6);
 }
@@ -310,7 +312,7 @@ th {
   padding-left: 100%;
   animation: crypt-scroll 22s linear infinite;
 }
-.theme-crypt .crypt-marquee-track img { vertical-align: middle; margin: 0 6px; }
+.theme-crypt .crypt-marquee-track img { vertical-align: middle; height: 20px; width: auto; margin: 0 6px; }
 @keyframes crypt-scroll {
   from { transform: translateX(0); }
   to { transform: translateX(-100%); }

@@ -101,11 +101,11 @@ export function App() {
         <>
           <div className="crypt-marquee" aria-hidden="true">
             <span className="crypt-marquee-track">
-              <img src={skullGif} width={20}  alt="" /> R.I.P. unauthorized
+              <img src={skullGif} width={20} alt="" /> R.I.P. unauthorized
               access &mdash; here lies every request that failed policy &mdash; enter,
-              mortal administrator <img src={batGif} width={28}  alt="" /> R.I.P.
+              mortal administrator <img src={batGif} width={28} alt="" /> R.I.P.
               unauthorized access &mdash; here lies every request that failed policy
-              &mdash; enter, mortal administrator <img src={batGif} width={28}  alt="" />
+              &mdash; enter, mortal administrator <img src={batGif} width={28} alt="" />
             </span>
           </div>
           <img className="cobweb cobweb-tl" src={cobwebGif} width={48} height={48} alt="" aria-hidden="true" />
