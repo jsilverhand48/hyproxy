@@ -1,13 +1,262 @@
-:root { font-family: system-ui, sans-serif; }
-body { display: flex; justify-content: center; align-items: center; min-height: 100vh;
-       margin: 0; background: #f2f4f7; }
-.card { background: #fff; padding: 2rem; border-radius: 8px; min-width: 320px;
-        box-shadow: 0 1px 4px rgba(0,0,0,.12); }
-label { display: block; margin-top: 1rem; font-size: .9rem; }
-input { width: 100%; padding: .5rem; margin-top: .25rem; box-sizing: border-box; }
-button { margin-top: 1.5rem; width: 100%; padding: .6rem; }
-.error { color: #b3261e; }
-code.block { display: block; padding: .75rem; background: #f6f6f6; margin: .5rem 0;
-             word-break: break-all; }
-.qr { width: 12rem; max-width: 100%; margin: .5rem auto; }
+/* ==========================================================================
+   hyproxy IdP  --  "SPACE / STARS" Geocities theme (circa 2001)
+   All decoration lives here: the CSP (default-src 'none'; style-src 'self')
+   forbids inline <style> and style="" attributes, so nothing renders unless
+   it is a class defined in this file. Images/cursors are same-origin only.
+   ========================================================================== */
+
+:root {
+  --space-bg: #05051a;
+  --space-panel: rgba(14, 10, 46, 0.86);
+  --neon: #00ffe1;
+  --hot: #ff4ff2;
+  --star: #fff7c2;
+  --danger: #ff5470;
+  --body-font: "Comic Sans MS", "Chalkboard", "Papyrus", cursive, fantasy;
+  --display-font: "Impact", "Haettenschweiler", "Arial Black", fantasy;
+}
+
+* { box-sizing: border-box; }
+
+html { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: var(--body-font);
+  color: #eafcff;
+  /* tessellated deep-space tile */
+  background-color: var(--space-bg);
+  background-image: url("/static/img/stars-tile.gif");
+  background-repeat: repeat;
+  cursor: url("/static/img/cursor-star.png"), auto;
+}
+
+a { color: var(--neon); }
+a:visited { color: var(--hot); }
+
+/* ---- animated twinkle overlay (pure CSS starfield on top of the tile) ---- */
+.starfield {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, #fff 99%, transparent),
+    radial-gradient(1px 1px at 70% 60%, #bfe9ff 99%, transparent),
+    radial-gradient(1px 1px at 40% 80%, #fff7c2 99%, transparent),
+    radial-gradient(2px 2px at 85% 20%, #fff 99%, transparent),
+    radial-gradient(1px 1px at 55% 15%, #cbb6ff 99%, transparent);
+  animation: twinkle 2.4s steps(2, jump-none) infinite alternate;
+  opacity: 0.85;
+}
+@keyframes twinkle { from { opacity: 0.25; } to { opacity: 0.9; } }
+
+/* ---- top marquee greeting ---- */
+.spacebar {
+  width: 100%;
+  z-index: 2;
+  background: linear-gradient(90deg, #1a0033, #3d005c, #1a0033);
+  border-bottom: 2px ridge var(--hot);
+  color: var(--star);
+  font-family: var(--display-font);
+  letter-spacing: 2px;
+  padding: 4px 0;
+  text-shadow: 0 0 6px var(--hot);
+}
+.spacebar img { vertical-align: middle; margin: 0 8px; }
+
+/* ---- site header ---- */
+.sitehead {
+  z-index: 2;
+  text-align: center;
+  margin: 16px 0 4px;
+}
+.sitehead h1.logo {
+  font-family: var(--display-font);
+  font-size: 3rem;
+  margin: 0;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 4px;
+  background: linear-gradient(90deg, #00ffe1, #7a5cff, #ff4ff2, #00ffe1);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 8px rgba(122, 92, 255, 0.8));
+}
+.sitehead .tagline {
+  color: var(--neon);
+  font-size: 0.9rem;
+  margin: 2px 0 8px;
+}
+.sitehead img { vertical-align: middle; margin: 0 10px; }
+
+/* ---- the content card: a translucent "space console" ---- */
+.card {
+  position: relative;
+  z-index: 2;
+  width: 90%;
+  max-width: 420px;
+  margin: 8px auto 20px;
+  padding: 1.5rem 1.75rem 1.75rem;
+  background: var(--space-panel);
+  border: 3px outset #6a4bd6;
+  border-radius: 14px;
+  box-shadow: 0 0 22px rgba(0, 255, 225, 0.35), inset 0 0 30px rgba(80, 30, 160, 0.4);
+  backdrop-filter: blur(1px);
+}
+.card h1 {
+  font-family: var(--display-font);
+  text-align: center;
+  letter-spacing: 2px;
+  margin: 0 0 0.4rem;
+  color: var(--star);
+  text-shadow: 0 0 8px var(--neon);
+}
+.card .pagemascot {
+  display: block;
+  margin: 0 auto 0.5rem;
+}
+
+/* ---- form primitives ---- */
+label {
+  display: block;
+  margin-top: 1rem;
+  font-size: 0.95rem;
+  color: var(--neon);
+  text-shadow: 0 0 4px rgba(0, 255, 225, 0.5);
+}
+input {
+  width: 100%;
+  padding: 0.55rem;
+  margin-top: 0.3rem;
+  box-sizing: border-box;
+  font-family: var(--body-font);
+  color: #08122b;
+  background: #d7f9ff;
+  border: 2px inset #00ffe1;
+  border-radius: 4px;
+}
+input:focus { outline: 2px solid var(--hot); }
+
+button, .btn {
+  margin-top: 1.5rem;
+  width: 100%;
+  padding: 0.65rem;
+  font-family: var(--display-font);
+  letter-spacing: 2px;
+  font-size: 1.05rem;
+  color: #10002b;
+  cursor: url("/static/img/cursor-star.png"), pointer;
+  background: linear-gradient(#ffffff, #8affef 40%, #00e0c6);
+  border: 3px outset #00ffe1;
+  border-radius: 8px;
+  text-shadow: 0 1px 0 #dffcff;
+}
+button:hover, .btn:hover {
+  background: linear-gradient(#ffffff, #ff9df6 40%, #ff4ff2);
+  border-color: var(--hot);
+}
+button:active { border-style: inset; }
+
+/* links styled as buttons keep centered text */
+a.btn { display: block; text-align: center; text-decoration: none; }
+
+/* ---- misc content ---- */
+.error, p.error {
+  color: #fff;
+  background: var(--danger);
+  border: 2px dashed #ffd0da;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  text-align: center;
+  animation: blink 1s steps(2, jump-none) infinite;
+}
+.hint, .muted { color: #a9c7ff; font-size: 0.85rem; }
+
+code.block, .codes {
+  display: block;
+  padding: 0.75rem;
+  background: #01010f;
+  color: var(--neon);
+  border: 2px inset #7a5cff;
+  margin: 0.5rem 0;
+  word-break: break-all;
+  font-family: "Courier New", ui-monospace, monospace;
+}
+
+/* recovery-code list */
+ol.codes-list, ul.codes-list {
+  font-family: "Courier New", ui-monospace, monospace;
+  color: var(--star);
+  background: #01010f;
+  border: 2px inset #7a5cff;
+  padding: 0.75rem 0.75rem 0.75rem 2rem;
+  border-radius: 6px;
+}
+
+/* TOTP QR */
+.qr {
+  width: 12rem;
+  max-width: 100%;
+  margin: 0.75rem auto;
+  padding: 6px;
+  background: #fff;
+  border: 3px ridge var(--neon);
+  border-radius: 6px;
+}
 .qr svg { display: block; width: 100%; height: auto; }
+
+/* rainbow separator */
+hr, .rainbow {
+  border: 0;
+  height: 6px;
+  margin: 1rem 0;
+  background: url("/static/img/rainbow-line.gif") repeat-x;
+  background-size: auto 6px;
+}
+
+/* blink helper (real <blink> is dead; use this class) */
+.blink { animation: blink 1s steps(2, jump-none) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---- footer chrome: counter + webring + badges ---- */
+.spacefoot {
+  z-index: 2;
+  width: 90%;
+  max-width: 640px;
+  margin: auto 0 24px;
+  text-align: center;
+  color: #a9c7ff;
+  font-size: 0.85rem;
+}
+.counter {
+  display: inline-block;
+  margin: 6px 0;
+  padding: 3px 8px;
+  background: #000;
+  color: #33ff66;
+  border: 2px inset #33ff66;
+  font-family: "Courier New", monospace;
+  letter-spacing: 3px;
+}
+.webring {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px dashed #7a5cff;
+  border-radius: 8px;
+}
+.webring a { margin: 0 6px; font-family: var(--display-font); letter-spacing: 1px; }
+.badges { margin-top: 10px; }
+.badges img { margin: 0 6px; vertical-align: middle; image-rendering: pixelated; }
+
+/* keep gif art crisp/low-res */
+img { image-rendering: pixelated; }
+
+@media (prefers-reduced-motion: reduce) {
+  .starfield, .blink, .error { animation: none; }
+}

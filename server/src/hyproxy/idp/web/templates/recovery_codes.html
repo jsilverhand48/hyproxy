@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Recovery codes{% endblock %}
 {% block content %}
+<img class="pagemascot" src="/static/img/planet.gif" width="40" height="40" alt="">
 <h1>Save your recovery codes</h1>
 <p>Each code works once. Store them somewhere safe; they are shown only now.</p>
-<ul>
+<ul class="codes-list">
   {% for code in codes %}<li><code>{{ code }}</code></li>{% endfor %}
 </ul>
 {% if continue_url %}

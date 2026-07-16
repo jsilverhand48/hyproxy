@@ -18,6 +18,12 @@ import { PolicyChanges } from "./views/PolicyChanges";
 import { MyResources } from "./views/MyResources";
 import { Downloads } from "./views/Downloads";
 import { Account } from "./views/Account";
+// Graveyard-theme chrome assets. Imported so Vite fingerprints them into
+// /assets/ -- the admin server only serves that mount (every other path falls
+// back to index.html), so these must not live in ui/public.
+import skullGif from "./assets/theme/skull.gif";
+import batGif from "./assets/theme/bat.gif";
+import cobwebGif from "./assets/theme/cobweb.gif";
 
 type Boot = "loading" | "ready" | "error";
 
@@ -86,8 +92,26 @@ export function App() {
 
   const sections = visibleSections();
   const active = sections.find((s) => s.id === section) ?? sections[0];
+  // Spooky graveyard theme applies to admin sections only; portal sections
+  // (my-resources / downloads / account) keep the plain dark theme.
+  const isAdminView = ADMIN_SECTIONS.some((s) => s.id === active.id);
   return (
-    <div className="layout">
+    <div className={isAdminView ? "layout theme-crypt" : "layout"}>
+      {isAdminView && (
+        <>
+          <div className="crypt-marquee" aria-hidden="true">
+            <span className="crypt-marquee-track">
+              <img src={skullGif} width={20} height={20} alt="" /> R.I.P. unauthorized
+              access &mdash; here lies every request that failed policy &mdash; enter,
+              mortal administrator <img src={batGif} width={28} height={14} alt="" /> R.I.P.
+              unauthorized access &mdash; here lies every request that failed policy
+              &mdash; enter, mortal administrator <img src={batGif} width={28} height={14} alt="" />
+            </span>
+          </div>
+          <img className="cobweb cobweb-tl" src={cobwebGif} width={48} height={48} alt="" aria-hidden="true" />
+          <img className="cobweb cobweb-tr" src={cobwebGif} width={48} height={48} alt="" aria-hidden="true" />
+        </>
+      )}
       <nav className="sidebar">
         <h1>hyproxy</h1>
         <ul>

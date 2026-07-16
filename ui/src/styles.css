@@ -270,3 +270,148 @@ th {
   color: var(--danger);
   border-color: var(--danger);
 }
+
+/* ==========================================================================
+   "GRAVEYARD" theme -- admin sections only (scoped under .theme-crypt, which
+   App.tsx sets on .layout when an ADMIN section is active). Portal pages never
+   get this class, so they keep the plain dark theme above. Asset URLs are
+   relative to this file (src/) so Vite fingerprints them into /assets/ -- the
+   admin server only serves that mount. img-src allows 'self' and data:.
+   ========================================================================== */
+.theme-crypt {
+  --bg: #07080a;
+  --panel: #101314;
+  --line: #2c3a2e;
+  --text: #cdd6cf;
+  --muted: #6f7d72;
+  --accent: #79d970;     /* poison green */
+  --danger: #d64545;     /* blood red */
+  background-color: #07080a;
+  background-image: url("./assets/theme/graveyard-tile.gif");
+  background-repeat: repeat;
+  cursor: url("./assets/theme/cursor-skull.png"), auto;
+}
+
+/* full-width scrolling epitaph across the top of the grid */
+.theme-crypt .crypt-marquee {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  white-space: nowrap;
+  background: linear-gradient(#0b0f0b, #16130f);
+  border-bottom: 1px solid var(--line);
+  color: #9be58f;
+  font-family: "Chiller", "Papyrus", "Impact", fantasy;
+  letter-spacing: 1px;
+  padding: 4px 0;
+  text-shadow: 0 0 6px rgba(121, 217, 112, 0.6);
+}
+.theme-crypt .crypt-marquee-track {
+  display: inline-block;
+  padding-left: 100%;
+  animation: crypt-scroll 22s linear infinite;
+}
+.theme-crypt .crypt-marquee-track img { vertical-align: middle; margin: 0 6px; }
+@keyframes crypt-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
+/* cobweb corners */
+.theme-crypt .cobweb {
+  position: fixed;
+  top: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.7;
+  image-rendering: pixelated;
+}
+.theme-crypt .cobweb-tl { left: 0; }
+.theme-crypt .cobweb-tr { right: 0; transform: scaleX(-1); }
+
+/* sidebar as a crypt wall */
+.theme-crypt .sidebar {
+  background: linear-gradient(#0d100d, #060706);
+  border-right: 1px solid var(--line);
+  box-shadow: inset -6px 0 14px rgba(0, 0, 0, 0.6);
+}
+.theme-crypt .sidebar h1 {
+  font-family: "Chiller", "Papyrus", "Impact", fantasy;
+  font-size: 1.7rem;
+  letter-spacing: 2px;
+  color: #b7f0ad;
+  text-align: center;
+  text-shadow: 0 0 8px rgba(121, 217, 112, 0.7);
+  animation: crypt-flicker 4s infinite;
+}
+@keyframes crypt-flicker {
+  0%, 92%, 100% { opacity: 1; }
+  93%, 95% { opacity: 0.4; }
+  94%, 96% { opacity: 0.85; }
+}
+.theme-crypt .nav.active,
+.theme-crypt .nav:hover {
+  background: #17251a;
+  color: #b7f0ad;
+  text-shadow: 0 0 5px rgba(121, 217, 112, 0.6);
+}
+
+/* content parchment-dark */
+.theme-crypt .content {
+  background: rgba(7, 8, 10, 0.72);
+}
+
+/* tombstone-style section headers */
+.theme-crypt .section-head h2,
+.theme-crypt .section-head h3,
+.theme-crypt .content > h2 {
+  font-family: "Chiller", "Papyrus", "Impact", fantasy;
+  letter-spacing: 1px;
+  color: #b7f0ad;
+  text-shadow: 0 0 6px rgba(121, 217, 112, 0.5);
+}
+
+/* tables as grave rows */
+.theme-crypt th {
+  color: #8fbf86;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 0.8rem;
+}
+.theme-crypt td,
+.theme-crypt th { border-bottom: 1px solid var(--line); }
+.theme-crypt tr:hover td { background: rgba(23, 37, 26, 0.5); }
+
+/* buttons as engraved stone */
+.theme-crypt button {
+  background: linear-gradient(#1a1f1a, #0c0f0c);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.theme-crypt button:hover {
+  border-color: var(--accent);
+  color: #b7f0ad;
+  box-shadow: 0 0 8px rgba(121, 217, 112, 0.4);
+}
+.theme-crypt button[type="submit"] {
+  border-color: var(--accent);
+  color: #b7f0ad;
+}
+.theme-crypt .link.danger,
+.theme-crypt .danger { color: var(--danger); }
+
+/* chips / status glow */
+.theme-crypt .chip { background: #0c0f0c; }
+.theme-crypt .status.approved { color: #79d970; border-color: #79d970; }
+
+/* modals rise from the crypt */
+.theme-crypt .modal,
+.theme-crypt ~ .modal-overlay .modal {
+  background: #0c0f0c;
+  border: 1px solid var(--line);
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-crypt .crypt-marquee-track { animation: none; }
+  .theme-crypt .sidebar h1 { animation: none; }
+}

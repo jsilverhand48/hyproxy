@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Error{% endblock %}
 {% block content %}
-<h1>Something went wrong</h1>
+<img class="pagemascot" src="/static/img/alien.gif" width="32" height="32" alt="">
+<h1>Houston, we have a problem</h1>
 <p class="error">{{ message }}</p>
-<p><a href="/auth/login">Start over</a></p>
+<p><a class="btn" href="/auth/login">Start over</a></p>
 {% endblock %}

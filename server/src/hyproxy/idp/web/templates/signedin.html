@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Signed in{% endblock %}
 {% block content %}
+<img class="pagemascot" src="/static/img/rocket.gif" width="48" height="48" alt="">
 <h1>You are signed in</h1>
-<p>Welcome, {{ user.display_name }}.</p>
+<p class="blink">*~* blast off, {{ user.display_name }}! *~*</p>
 <form method="get" action="/oidc/logout">
   <button type="submit">Log out</button>
 </form>
