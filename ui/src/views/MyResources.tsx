@@ -2,6 +2,8 @@ import type { MyResource } from "../lib/types";
 import { useResource } from "../lib/useApi";
 import { AsyncBody, Section } from "../components/ui";
 
+const GUAC_PROTOCOLS = new Set(["vnc", "rdp", "ssh"]);
+
 export function MyResources() {
   const { data, error, loading } = useResource<MyResource[]>("/portal/me/resources");
 
@@ -23,12 +25,18 @@ export function MyResources() {
                 <td>{r.name}</td>
                 <td>{r.protocol}</td>
                 <td>
-                  {r.public_host ? (
+                  {!r.public_host ? (
+                    <span className="muted">(not routed)</span>
+                  ) : GUAC_PROTOCOLS.has(r.protocol) ? (
+                    // Guac hosts only serve the token-authed WS tunnel; a plain
+                    // https:// visit 401s. Route through the connect view.
+                    <a href={`/connect/${r.id}`} target="_blank" rel="noreferrer">
+                      Connect
+                    </a>
+                  ) : (
                     <a href={`https://${r.public_host}`} target="_blank" rel="noreferrer">
                       {r.public_host}
                     </a>
-                  ) : (
-                    <span className="muted">(not routed)</span>
                   )}
                 </td>
                 <td>{r.description ?? <span className="muted">-</span>}</td>

@@ -158,10 +158,17 @@ Status as of this writing (all tested unless noted):
   internal). Go tests cover allow/deny/503/missing-token and the allowlist.
 - M4a Node tunnel service (`tunnel/`, guacamole-lite): DONE (builds, boots,
   serves healthz). guacd itself is a native daemon, absent on the dev machine.
-- REMAINING (needs a live guacd, not available on the dev machine): the in-
-  browser guacamole-common-js client page (end-user connect view served behind
-  the gateway), the guacd deployment + network-segmentation runbook, and
-  tunnel-creation rate limiting. The milestones below capture these.
+- M4b in-browser client (2026-07-16): DONE. SPA connect view
+  (`ui/src/views/Connect.tsx` at `/connect/:resourceId`, guacamole-common-js)
+  mints at `POST /guac/token` (CORS on the authz app for the SPA origins;
+  connect-src widened to the auth host + `wss://*.<domain>`) and opens
+  `wss://<public_host>/?token=...`; portal links guac resources to the connect
+  view; admin Resources view gained a Connection editor over
+  `/resources/{id}/connection`. Tunnel allows client display params
+  (width/height/dpi/audio/image/timezone) only. Deployed to prod with the
+  guacd + tunnel compose profile.
+- REMAINING: the guacd network-segmentation runbook and tunnel-creation rate
+  limiting.
 
 ### Seams already in place
 

@@ -30,6 +30,17 @@ export interface Resource {
   enabled: boolean;
 }
 
+export interface ResourceConnection {
+  id: string;
+  resource_id: string;
+  protocol: string;
+  hostname: string;
+  port: number;
+  params: Record<string, string>;
+  secret_keys: string[]; // names only; values never leave the server
+  has_secret: boolean;
+}
+
 export interface Policy {
   id: string;
   role_id: string;

@@ -27,16 +27,16 @@ project was designed around; this document is the containerization reference.
 
 ### Containerized (`docker-compose.yml`)
 
-| Service   | Image                     | Profile | Published (loopback) | Purpose |
-|-----------|---------------------------|---------|----------------------|---------|
-| postgres  | `postgres:17-alpine`      | default | `127.0.0.1:5433`     | data store |
-| migrate   | `hyproxy-server:local`    | tools   | -                    | one-shot `alembic upgrade head` |
-| cli       | `hyproxy-server:local`    | tools   | -                    | one-shot `hyproxy.cli` (keys, admin, clients, ship-logs) |
-| idp       | `hyproxy-server:local`    | app     | `127.0.0.1:8300`     | OIDC provider |
-| admin     | `hyproxy-server:local`    | app     | `127.0.0.1:8400`     | admin API + served SPA |
-| authz     | `hyproxy-server:local`    | app     | `127.0.0.1:8500`     | policy decision point + gateway RP |
-| guacd     | `guacamole/guacd:1.5.5`   | guac    | internal only        | Guacamole protocol daemon |
-| tunnel    | `hyproxy-tunnel:local`    | guac    | `127.0.0.1:8600`     | guacamole-lite WebSocket bridge |
+| Service  | Image                   | Profile | Published (loopback) | Purpose                                                  |
+| ----------| -------------------------| ---------| ----------------------| ----------------------------------------------------------|
+| postgres | `postgres:17-alpine`    | default | `127.0.0.1:5433`     | data store                                               |
+| migrate  | `hyproxy-server:local`  | tools   | -                    | one-shot `alembic upgrade head`                          |
+| cli      | `hyproxy-server:local`  | tools   | -                    | one-shot `hyproxy.cli` (keys, admin, clients, ship-logs) |
+| idp      | `hyproxy-server:local`  | app     | `127.0.0.1:8300`     | OIDC provider                                            |
+| admin    | `hyproxy-server:local`  | app     | `127.0.0.1:8400`     | admin API + served SPA                                   |
+| authz    | `hyproxy-server:local`  | app     | `127.0.0.1:8500`     | policy decision point + gateway RP                       |
+| guacd    | `guacamole/guacd:1.5.5` | guac    | internal only        | Guacamole protocol daemon                                |
+| tunnel   | `hyproxy-tunnel:local`  | guac    | `127.0.0.1:8600`     | guacamole-lite WebSocket bridge                          |
 
 The three Python services share one image (`server/Dockerfile`), differing only
 by their compose `command`. The React UI is compiled in a build stage of that

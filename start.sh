@@ -212,7 +212,7 @@ $(printf '\033[1;32mhyproxy staging is up.\033[0m')
   Admin UI    ${HYPROXY_ADMIN_UI_ORIGIN:-https://admin.$HYPROXY_DOMAIN}   (LAN only; OIDC + DPoP + step-up enforced)
   Auth host   https://auth.$HYPROXY_DOMAIN           (gateway / guac broker)
   Data plane  baremetal on ${DP_LISTEN:-:443}, Host-routed from dataplane/config.json
-  Guac bridge ${HYPROXY_GUAC_CYPHER_KEY:+enabled (tunnel + guacd)}${HYPROXY_GUAC_CYPHER_KEY:-disabled}
+  Guac bridge $([ -n "${HYPROXY_GUAC_CYPHER_KEY:-}" ] && echo "enabled (tunnel + guacd)" || echo "disabled")
 
 Point idp./admin./auth.$HYPROXY_DOMAIN at this VM's LAN IP (LAN DNS or /etc/hosts).
 Container logs:  docker compose ${PROFILES[*]} logs -f

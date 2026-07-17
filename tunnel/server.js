@@ -42,11 +42,12 @@ const guacdOptions = {
 const clientOptions = {
   crypt: { cypher: "AES-256-CBC", key },
   log: { level: process.env.LOG_LEVEL || "NORMAL" },
-  // Tokens carry the full connection; do not accept client-supplied overrides.
+  // Tokens carry the full connection (hostname/credentials); the client may
+  // only supply display-shaping params, never connection overrides.
   allowedUnencryptedConnectionSettings: {
-    rdp: [],
-    vnc: [],
-    ssh: [],
+    rdp: ["width", "height", "dpi", "audio", "image", "timezone"],
+    vnc: ["width", "height", "dpi", "audio", "image", "timezone"],
+    ssh: ["width", "height", "dpi", "audio", "image", "timezone"],
   },
 };
 

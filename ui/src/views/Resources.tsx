@@ -4,13 +4,16 @@ import type { Resource } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
 import { AsyncBody, Banner, Section } from "../components/ui";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ConnectionDialog } from "../components/ConnectionDialog";
 
 const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh"];
+const GUAC_PROTOCOLS = new Set(["vnc", "rdp", "ssh"]);
 
 export function Resources() {
   const { data, error, loading, reload } = useResource<Resource[]>("/resources");
   const [msg, setMsg] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Resource | null>(null);
+  const [editingConnection, setEditingConnection] = useState<Resource | null>(null);
   const [form, setForm] = useState({ name: "", protocol: "https", public_host: "", host: "", ports: "" });
 
   async function create() {
@@ -126,6 +129,11 @@ export function Resources() {
                   <button className="link" onClick={() => editRoute(r)}>
                     Route
                   </button>
+                  {GUAC_PROTOCOLS.has(r.protocol) && (
+                    <button className="link" onClick={() => setEditingConnection(r)}>
+                      Connection
+                    </button>
+                  )}
                   <button className="link" onClick={() => toggle(r)}>
                     {r.enabled ? "Disable" : "Enable"}
                   </button>
@@ -138,6 +146,9 @@ export function Resources() {
           </tbody>
         </table>
       </AsyncBody>
+      {editingConnection !== null && (
+        <ConnectionDialog resource={editingConnection} onClose={() => setEditingConnection(null)} />
+      )}
       {pendingDelete !== null && (
         <ConfirmDialog
           title="Delete resource"

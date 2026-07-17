@@ -27,14 +27,21 @@ def _idp_origin() -> str:
 
 
 def _csp() -> str:
-    # The SPA fetches its own /api (self) and the IdP token endpoint (connect to
-    # the IdP origin). Scripts/styles are self-hosted, hashed assets: no inline,
+    # The SPA fetches its own /api (self), the IdP token endpoint (connect to
+    # the IdP origin), the auth host's /guac/token (cookie-authed mint for the
+    # guac connect view), and the wss:// guac tunnel hosts under the cookie
+    # domain. Scripts/styles are self-hosted, hashed assets: no inline,
     # no eval. Navigations to the IdP (authorize / step-up) are top-level, not
     # governed by connect-src.
+    settings = get_settings()
     connect = "'self'"
     origin = _idp_origin()
     if origin:
         connect += f" {origin}"
+    connect += f" {settings.external_scheme}://{settings.auth_host}"
+    if settings.gateway_cookie_domain:
+        d = settings.gateway_cookie_domain.lstrip(".")
+        connect += f" wss://*.{d}"
     return (
         "default-src 'none'; "
         "script-src 'self'; "

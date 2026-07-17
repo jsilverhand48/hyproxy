@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from hyproxy.authz.check import router as check_router
 from hyproxy.authz.gateway import router as gateway_router
@@ -43,6 +44,23 @@ def create_app(idp_http: httpx.AsyncClient | None = None) -> FastAPI:
     app.include_router(routes_router)
     app.include_router(gateway_router)
     app.include_router(guac_router)
+
+    # The guac connect view runs on the SPA origins and must POST the
+    # cookie-authed /guac/token cross-origin (the data plane only exposes
+    # /gateway/* and /guac/token from this app to browsers, so this is
+    # effectively scoped to those). Credentials are required: the endpoint
+    # authenticates via the gateway session cookie.
+    settings = get_settings()
+    spa_origins = [o for o in (settings.admin_ui_origin, settings.portal_origin) if o]
+    if spa_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=spa_origins,
+            allow_methods=["POST"],
+            allow_headers=["content-type"],
+            allow_credentials=True,
+            max_age=600,
+        )
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

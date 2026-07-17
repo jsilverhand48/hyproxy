@@ -16,4 +16,7 @@ export const config = {
   scope: "openid profile email",
   portalHost,
   isPortal: portalHost !== "" && window.location.host === portalHost,
+  // Auth-host origin: guac tunnel tokens are minted at <origin>/guac/token
+  // (cookie-authed, cross-origin from the SPA).
+  authOrigin: (env.VITE_AUTH_ORIGIN ?? "").replace(/\/$/, ""),
 };

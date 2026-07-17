@@ -93,6 +93,13 @@ case "$HYPROXY_ISSUER" in
   *example.com*|*localhost*) die "HYPROXY_ISSUER is still a placeholder ($HYPROXY_ISSUER); set your real host in .env" ;;
 esac
 
+# Auth-host origin baked into the SPA (guac token mints). Mirror start.sh's
+# derivation so the image build and the running stack agree.
+if [ -n "${HYPROXY_DOMAIN:-}" ]; then
+  export HYPROXY_AUTH_HOST="${HYPROXY_AUTH_HOST:-auth.$HYPROXY_DOMAIN}"
+fi
+export HYPROXY_EXTERNAL_SCHEME="${HYPROXY_EXTERNAL_SCHEME:-https}"
+
 # The file backend needs a real key file; the TPM backend keeps the key in the
 # TPM (the compose master_key secret points at /dev/null and is never read).
 if [ "${HYPROXY_SECRETS_BACKEND:-file}" != "tpm" ]; then
@@ -142,6 +149,7 @@ compute_image_hash() {
     printf 'arg VITE_IDP_ISSUER=%s\n' "${HYPROXY_ISSUER:-}"
     printf 'arg VITE_ADMIN_UI_CLIENT_ID=%s\n' "${VITE_ADMIN_UI_CLIENT_ID:-admin-ui}"
     printf 'arg VITE_PORTAL_HOST=%s\n' "${VITE_PORTAL_HOST:-}"
+    printf 'arg VITE_AUTH_ORIGIN=%s\n' "${HYPROXY_EXTERNAL_SCHEME:-https}://${HYPROXY_AUTH_HOST:-}"
   } | sha256sum | awk '{print $1}'
 }
 

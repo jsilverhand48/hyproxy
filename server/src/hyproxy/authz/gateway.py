@@ -49,7 +49,9 @@ def client_ip(request: Request) -> str:
 
 async def valid_return_url(db: AsyncSession, rd: str) -> bool:
     """Open-redirect guard: only https URLs whose host is a registered,
-    enabled resource public_host may be returned to."""
+    enabled resource public_host — or one of the configured SPA origins
+    (admin console / portal, which may be static data-plane routes rather
+    than DB resources) — may be returned to."""
     settings = get_settings()
     try:
         parts = urlsplit(rd)
@@ -57,6 +59,9 @@ async def valid_return_url(db: AsyncSession, rd: str) -> bool:
         return False
     if parts.scheme != settings.external_scheme or not parts.hostname:
         return False
+    for origin in (settings.admin_ui_origin, settings.portal_origin):
+        if origin and urlsplit(origin).hostname == parts.hostname:
+            return True
     resource = await db.scalar(
         select(Resource).where(Resource.public_host == parts.hostname, Resource.enabled.is_(True))
     )

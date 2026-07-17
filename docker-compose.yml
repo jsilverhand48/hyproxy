@@ -30,6 +30,9 @@ x-server-build: &server-build
     # Portal host (apps.<domain>): the SPA switches to portal-only sections on
     # this host. Empty keeps the single-host admin behavior.
     VITE_PORTAL_HOST: ${VITE_PORTAL_HOST:-}
+    # Auth-host origin: the guac connect view mints tunnel tokens at
+    # <origin>/guac/token (cookie-authed, cross-origin from the SPA).
+    VITE_AUTH_ORIGIN: ${HYPROXY_EXTERNAL_SCHEME:-https}://${HYPROXY_AUTH_HOST:-auth.localhost}
 
 # Shared control-plane environment. Env vars take precedence over any baked
 # config, so these pin the containerized topology (service-name DB host, etc.).

@@ -12,7 +12,7 @@ WORKDIR /app/tunnel
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY server.js ./
+COPY server.js logger.js ./
 
 USER node
 EXPOSE 8600
