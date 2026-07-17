@@ -254,6 +254,12 @@ services:
     profiles: [guac]
     image: guacamole/guacd:1.5.5
     networks: [internal]   # internal only; reachable from the tunnel, never published
+    healthcheck:
+      # The image built-in healthcheck probes on a 5-minute interval, which
+      # leaves the container in "health: starting" (and up --wait blocked)
+      # for the whole first interval. Same probe, fast cadence.
+      <<: *healthcheck-defaults
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 4822 || exit 1"]
     restart: unless-stopped
 
   tunnel:
