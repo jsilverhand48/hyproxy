@@ -42,6 +42,12 @@ def _csp() -> str:
     if settings.gateway_cookie_domain:
         d = settings.gateway_cookie_domain.lstrip(".")
         connect += f" wss://*.{d}"
+    if settings.portal_origin:
+        # The guac tunnel WS lives on the portal host (/guac/tunnel); cover it
+        # explicitly for deployments without a gateway cookie domain.
+        portal_host = urlsplit(settings.portal_origin).netloc
+        if portal_host:
+            connect += f" wss://{portal_host}"
     return (
         "default-src 'none'; "
         "script-src 'self'; "

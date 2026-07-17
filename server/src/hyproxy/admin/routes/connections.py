@@ -72,7 +72,8 @@ async def put_connection(
     db: DbDep,
     authed: StepUpDep,
 ) -> ResourceConnectionOut:
-    if await db.get(Resource, resource_id) is None:
+    resource = await db.get(Resource, resource_id)
+    if resource is None:
         raise HTTPException(status_code=404, detail="resource not found")
     row = await _load(db, resource_id)
     creating = row is None
@@ -86,6 +87,9 @@ async def put_connection(
     row.port = body.port
     row.params_json = body.params
     row.updated_at = datetime.now(UTC)
+    # Keep the policy-facing resource host/ports in sync with the guacd target.
+    resource.host = body.hostname
+    resource.ports = [body.port]
     # secret_params absent -> keep existing; empty dict -> clear; non-empty -> reseal.
     if body.secret_params is not None:
         if body.secret_params:

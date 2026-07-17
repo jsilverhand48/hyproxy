@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 class Page[T](BaseModel):
@@ -82,6 +82,21 @@ def _normalize_public_host(v: object) -> object:
     return host
 
 
+class ResourceConnectionIn(BaseModel):
+    """Guacd connection details nested in ResourceCreate (protocol comes from
+    the resource itself)."""
+
+    hostname: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    # Non-secret guacd parameters (all values are strings in the guac protocol).
+    params: dict[str, str] = Field(default_factory=dict)
+    # Write-only: sealed at rest, never returned.
+    secret_params: dict[str, str] | None = None
+
+
+GUAC_PROTOCOLS = {"vnc", "rdp", "ssh"}
+
+
 class ResourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     protocol: Literal["http", "https", "tcp", "vnc", "rdp", "ssh"]
@@ -91,8 +106,23 @@ class ResourceCreate(BaseModel):
     path_prefix: str | None = None
     description: str | None = None
     enabled: bool = True
+    # Required for vnc/rdp/ssh, forbidden otherwise.
+    connection: ResourceConnectionIn | None = None
 
     _norm_public_host = field_validator("public_host", mode="before")(_normalize_public_host)
+
+    @model_validator(mode="after")
+    def _check_protocol_shape(self) -> "ResourceCreate":
+        if self.protocol in GUAC_PROTOCOLS:
+            if self.public_host is not None:
+                raise ValueError(
+                    "guac resources are reached via the portal tunnel and cannot have a public_host"
+                )
+            if self.connection is None:
+                raise ValueError("vnc/rdp/ssh resources require connection details")
+        elif self.connection is not None:
+            raise ValueError("connection is only valid for vnc/rdp/ssh resources")
+        return self
 
 
 class ResourcePatch(BaseModel):

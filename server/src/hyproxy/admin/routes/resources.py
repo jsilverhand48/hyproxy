@@ -6,9 +6,11 @@ from sqlalchemy import select
 
 from hyproxy.admin.changes import record_change
 from hyproxy.admin.deps import AdminDep, DbDep, StepUpDep
-from hyproxy.admin.schemas import ResourceCreate, ResourceOut, ResourcePatch
+from hyproxy.admin.schemas import GUAC_PROTOCOLS, ResourceCreate, ResourceOut, ResourcePatch
 from hyproxy.config import get_settings
-from hyproxy.db.models import Resource
+from hyproxy.core import secrets
+from hyproxy.db.models import Resource, ResourceConnection
+from hyproxy.guac.connections import seal_secret_params
 
 router = APIRouter(prefix="/api/v1/resources", tags=["resources"])
 
@@ -53,7 +55,13 @@ async def create_resource(body: ResourceCreate, db: DbDep, authed: StepUpDep) ->
     if await db.scalar(select(Resource).where(Resource.name == body.name)) is not None:
         raise HTTPException(status_code=409, detail="resource name exists")
     await _validate_public_host(db, body.public_host)
-    row = Resource(**body.model_dump())
+    fields = body.model_dump(exclude={"connection"})
+    if body.connection is not None:
+        # Policy-facing host/ports mirror the guacd target so there is a single
+        # source of truth in the UI.
+        fields["host"] = body.connection.hostname
+        fields["ports"] = [body.connection.port]
+    row = Resource(**fields)
     db.add(row)
     await db.flush()
     await record_change(
@@ -64,6 +72,36 @@ async def create_resource(body: ResourceCreate, db: DbDep, authed: StepUpDep) ->
         action="create",
         after=_snapshot(row),
     )
+    if body.connection is not None:
+        conn = ResourceConnection(
+            resource_id=row.id,
+            protocol=body.protocol,
+            hostname=body.connection.hostname,
+            port=body.connection.port,
+            params_json=body.connection.params,
+            secret_keys=[],
+        )
+        if body.connection.secret_params:
+            backend = secrets.get_secrets_backend()
+            key_id, blob, keys = seal_secret_params(backend, body.connection.secret_params)
+            conn.key_id, conn.secret_ciphertext, conn.secret_keys = key_id, blob, keys
+        db.add(conn)
+        await db.flush()
+        await record_change(
+            db,
+            actor_id=authed.user.id,
+            entity_type="resource_connection",
+            entity_id=conn.id,
+            action="create",
+            after={
+                "protocol": conn.protocol,
+                "hostname": conn.hostname,
+                "port": conn.port,
+                "params": conn.params_json,
+                "secret_keys": list(conn.secret_keys),
+                "has_secret": conn.secret_ciphertext is not None,
+            },
+        )
     return ResourceOut.model_validate(row)
 
 
@@ -76,6 +114,11 @@ async def patch_resource(
         raise HTTPException(status_code=404, detail="resource not found")
     patch = body.model_dump(exclude_unset=True)
     if "public_host" in patch:
+        if patch["public_host"] is not None and row.protocol in GUAC_PROTOCOLS:
+            raise HTTPException(
+                status_code=422,
+                detail="guac resources use the portal tunnel and cannot have a public_host",
+            )
         await _validate_public_host(db, patch["public_host"], exclude_id=resource_id)
     before = _snapshot(row)
     for field, value in patch.items():

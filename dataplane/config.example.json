@@ -45,7 +45,8 @@
     },
     "apps.localhost": {
       "backend": "http://127.0.0.1:8400",
-      "auth": false
+      "auth": false,
+      "guac_tunnel_path": true
     }
   }
 }

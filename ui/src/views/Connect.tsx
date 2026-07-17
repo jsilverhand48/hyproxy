@@ -1,10 +1,12 @@
 // Full-screen Guacamole session view (/connect/:resourceId). Mints a
 // single-use tunnel token at the auth host, then opens the WebSocket tunnel
-// to the resource's public host (wss://<public_host>/?token=...). Tokens are
-// single-use with a short TTL, so every (re)connect mints a fresh one.
+// on the portal host's fixed path (wss://<portal_host>/guac/tunnel?token=...).
+// Tokens are single-use with a short TTL, so every (re)connect mints a fresh
+// one.
 
 import { useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
+import { config } from "../lib/config";
 import type { MyResource } from "../lib/types";
 import { useResource } from "../lib/useApi";
 import { GuacError, mintGuacToken } from "../lib/guac";
@@ -23,11 +25,13 @@ export function Connect({ resourceId }: { resourceId: string }) {
   const [message, setMessage] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
-  const publicHost = resource?.public_host ?? null;
+  // The tunnel rides the portal host; fall back to the current host for dev
+  // builds without VITE_PORTAL_HOST (the connect view already lives there).
+  const tunnelHost = config.portalHost || window.location.host;
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!resource || !publicHost || !container) return;
+    if (!resource || !container) return;
 
     let disposed = false;
     let client: Guacamole.Client | null = null;
@@ -54,7 +58,7 @@ export function Connect({ resourceId }: { resourceId: string }) {
       }
       if (disposed) return;
 
-      const tunnel = new Guacamole.WebSocketTunnel(`wss://${publicHost}/`);
+      const tunnel = new Guacamole.WebSocketTunnel(`wss://${tunnelHost}/guac/tunnel`);
       client = new Guacamole.Client(tunnel);
       const display = client.getDisplay();
       container.replaceChildren(display.getElement());
@@ -112,12 +116,11 @@ export function Connect({ resourceId }: { resourceId: string }) {
       client?.disconnect();
       container.replaceChildren();
     };
-  }, [resource, publicHost, resourceId, attempt]);
+  }, [resource, tunnelHost, resourceId, attempt]);
 
   if (loading) return <p className="center">Loading resource...</p>;
   if (error) return <p className="center error">Failed to load resources: {error}</p>;
   if (!resource) return <p className="center error">Unknown or unauthorized resource.</p>;
-  if (!publicHost) return <p className="center error">This resource has no route (public host).</p>;
 
   return (
     <div className="connect-view">

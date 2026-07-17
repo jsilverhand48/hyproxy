@@ -162,9 +162,13 @@ Status as of this writing (all tested unless noted):
   (`ui/src/views/Connect.tsx` at `/connect/:resourceId`, guacamole-common-js)
   mints at `POST /guac/token` (CORS on the authz app for the SPA origins;
   connect-src widened to the auth host + `wss://*.<domain>`) and opens
-  `wss://<public_host>/?token=...`; portal links guac resources to the connect
-  view; admin Resources view gained a Connection editor over
-  `/resources/{id}/connection`. Tunnel allows client display params
+  `wss://apps.<domain>/guac/tunnel?token=...` (2026-07-17 rework: guac
+  resources carry no public_host; the data plane serves the tunnel on the
+  portal route's fixed path via the `guac_tunnel_path` flag); portal links
+  guac resources to the connect view on the portal host; admin Resources view
+  creates/edits resource + connection in one modal (composite
+  `POST /resources` with nested `connection`, edits via
+  `/resources/{id}/connection`). Tunnel allows client display params
   (width/height/dpi/audio/image/timezone) only. Deployed to prod with the
   guacd + tunnel compose profile.
 - REMAINING: the guacd network-segmentation runbook and tunnel-creation rate

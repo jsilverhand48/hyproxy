@@ -28,6 +28,11 @@ type Route struct {
 	// guacamole-lite service). Such routes are authorized by single-use grant
 	// consumption (/guac/consume) instead of the per-request /authz/check.
 	GuacTunnel bool `json:"guac_tunnel,omitempty"`
+	// GuacTunnelPath serves the Guacamole WebSocket tunnel on this route's
+	// fixed /guac/tunnel path (everything else proxies to Backend as usual).
+	// Set on the apps portal route only; guac resources carry no public host
+	// of their own.
+	GuacTunnelPath bool `json:"guac_tunnel_path,omitempty"`
 	// LanOnly restricts the route to clients whose TCP peer address is inside
 	// the LAN networks (Config.LanCidrs, or the host's own interface subnets
 	// when unset). Blocked browsers are redirected to Config.LanOnlyRedirect.
@@ -220,6 +225,9 @@ func (c *Config) Validate() error {
 		}
 		if route.BackendPort == 0 {
 			route.BackendPort = portOf(u)
+		}
+		if route.GuacTunnelPath && c.GuacBackend == "" {
+			return fmt.Errorf("route %s: guac_tunnel_path requires guac_backend", host)
 		}
 		normalized[h] = route
 	}

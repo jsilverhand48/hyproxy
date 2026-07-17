@@ -1,3 +1,4 @@
+import { config } from "../lib/config";
 import type { MyResource } from "../lib/types";
 import { useResource } from "../lib/useApi";
 import { AsyncBody, Section } from "../components/ui";
@@ -25,14 +26,23 @@ export function MyResources() {
                 <td>{r.name}</td>
                 <td>{r.protocol}</td>
                 <td>
-                  {!r.public_host ? (
-                    <span className="muted">(not routed)</span>
-                  ) : GUAC_PROTOCOLS.has(r.protocol) ? (
-                    // Guac hosts only serve the token-authed WS tunnel; a plain
-                    // https:// visit 401s. Route through the connect view.
-                    <a href={`/connect/${r.id}`} target="_blank" rel="noreferrer">
+                  {GUAC_PROTOCOLS.has(r.protocol) ? (
+                    // Guac resources have no public host; the connect view and
+                    // its WS tunnel live on the portal host, so link there
+                    // absolutely (admins may be browsing on the admin host).
+                    <a
+                      href={
+                        config.portalHost
+                          ? `https://${config.portalHost}/connect/${r.id}`
+                          : `/connect/${r.id}`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Connect
                     </a>
+                  ) : !r.public_host ? (
+                    <span className="muted">(not routed)</span>
                   ) : (
                     <a href={`https://${r.public_host}`} target="_blank" rel="noreferrer">
                       {r.public_host}

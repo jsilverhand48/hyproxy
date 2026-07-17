@@ -9,8 +9,9 @@ input, preserving the data plane's SSRF invariant. Only enabled resources with a
 routing host are emitted:
 
   - http/https -> a reverse-proxy route to {protocol}://{host}:{ports[0]}
-  - vnc/rdp/ssh -> a Guacamole tunnel route (the data plane supplies the tunnel
-    backend from its own config; the connection's real host stays sealed)
+  - vnc/rdp/ssh -> never emitted; guac sessions ride the portal host's fixed
+    /guac/tunnel path (data-plane `guac_tunnel_path` route flag), so guac
+    resources carry no public_host
   - tcp -> skipped (not an L7 backend today; awaits the raw-L4 listener seam)
 """
 
@@ -28,7 +29,6 @@ router = APIRouter()
 
 DbDep = Annotated[AsyncSession, Depends(get_db)]
 
-_GUAC_PROTOCOLS = {"vnc", "rdp", "ssh"}
 _HTTP_PROTOCOLS = {"http", "https"}
 
 
@@ -65,7 +65,7 @@ async def routes(db: DbDep) -> RoutesResponse:
             table[host] = RouteOut(
                 backend=f"{r.protocol}://{r.host}:{port}", backend_port=port
             )
-        elif r.protocol in _GUAC_PROTOCOLS:
-            table[host] = RouteOut(guac_tunnel=True)
+        # vnc/rdp/ssh: served via the portal-host tunnel path, never a
+        # per-resource route (guac resources have no public_host).
         # tcp and anything else: not an L7 route yet, skip.
     return RoutesResponse(routes=table)

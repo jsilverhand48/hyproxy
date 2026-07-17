@@ -540,11 +540,12 @@ cat > "$DP_OUT" <<EOF
   "log_backup_count": 2,
   "routes": {
     "idp.$HYPROXY_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
-    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false }
+    "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false },
+    "apps.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false, "guac_tunnel_path": true }
   }
 }
 EOF
-echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/auth.$HYPROXY_DOMAIN)"
+echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/apps/auth.$HYPROXY_DOMAIN)"
 
 # bootstrap.sh and the render above ran as root; re-own so the service
 # account can read everything it runs (including the 0600 config.json).
@@ -757,6 +758,10 @@ chmod 0644 /etc/systemd/system/hyproxy.service \
            /etc/systemd/system/hyproxy-ship-logs.service \
            /etc/systemd/system/hyproxy-ship-logs.timer
 systemctl daemon-reload
+
+systemctl enable hyproxy
+systemctl enable hyproxy-acme
+systemctl enable hyproxy-ship-logs
 
 # --- 8b. kernel network tuning (BBR congestion control) ----------------------
 c_info "enabling BBR congestion control (WAN streaming throughput)"

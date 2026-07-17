@@ -64,6 +64,10 @@ type Server struct {
 	authHost     string
 	staticRoutes map[string]config.Route
 	guacBackend  string
+	// guacProxy serves the fixed /guac/tunnel path on routes flagged
+	// guac_tunnel_path (the apps portal host). Nil when guac_backend is unset;
+	// config.Validate guarantees no route carries the flag in that case.
+	guacProxy *httputil.ReverseProxy
 	// LAN client allowlist for lan_only routes (config lan_cidrs, or the
 	// host's own interface subnets when unset) and where blocked browsers
 	// are redirected (the IdP login page).
@@ -112,6 +116,13 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		lanOnlyRedirect: cfg.LanOnlyRedirect,
 		transport:       transport,
 		botFilter:       bf,
+	}
+	if cfg.GuacBackend != "" {
+		u, err := url.Parse(cfg.GuacBackend)
+		if err != nil {
+			return nil, err
+		}
+		s.guacProxy = newReverseProxy(u, log, transport)
 	}
 	// Initial snapshot: static infra routes only. The management plane
 	// (idp/admin) is reachable even if the control plane is down at boot; DB
@@ -388,6 +399,14 @@ func (s *Server) serveApp(
 
 	if route.GuacTunnel {
 		s.serveGuacTunnel(w, r, upstream, cookie)
+		return
+	}
+
+	// Fixed tunnel path on the portal host: guac resources carry no public
+	// host of their own, so their WebSocket tunnel rides here. Everything
+	// else on the route proxies to the normal backend below.
+	if route.GuacTunnelPath && r.URL.Path == "/guac/tunnel" {
+		s.serveGuacTunnel(w, r, s.guacProxy, cookie)
 		return
 	}
 
