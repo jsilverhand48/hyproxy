@@ -62,8 +62,8 @@ export function App() {
     (async () => {
       try {
         if (window.location.pathname === "/callback") {
-          await completeLogin(window.location.search);
-          window.history.replaceState({}, "", "/");
+          const returnTo = await completeLogin(window.location.search);
+          window.history.replaceState({}, "", returnTo ?? "/");
         }
         if (!isAuthenticated()) {
           await beginLogin(); // navigates away; nothing below runs

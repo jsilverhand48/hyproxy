@@ -75,7 +75,7 @@ async def ingest_ui_logs(batch: UiLogBatch, request: Request) -> None:
             _LEVELS[entry.level],
             entry.msg,
             extra={
-                "client_ip": client_ip,
+                "src": client_ip,
                 "stack": entry.stack,
                 "url": entry.url,
                 "client_ts": entry.ts,

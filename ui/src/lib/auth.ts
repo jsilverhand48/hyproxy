@@ -18,6 +18,8 @@ interface FlowState {
   verifier: string;
   state: string;
   nonce: string;
+  // In-app path to restore after the OIDC round-trip (e.g. /connect/<id>).
+  returnTo?: string;
 }
 
 const FLOW_KEY = "hyproxy-oidc-flow";
@@ -66,7 +68,12 @@ export function showSignedIn(): void {
 }
 
 export async function beginLogin(): Promise<void> {
-  const flow: FlowState = { verifier: randomToken(48), state: randomToken(16), nonce: randomToken(16) };
+  const flow: FlowState = {
+    verifier: randomToken(48),
+    state: randomToken(16),
+    nonce: randomToken(16),
+    returnTo: window.location.pathname + window.location.search,
+  };
   sessionStorage.setItem(FLOW_KEY, JSON.stringify(flow));
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -81,7 +88,9 @@ export async function beginLogin(): Promise<void> {
   window.location.assign(`${config.issuer}/oidc/authorize?${params.toString()}`);
 }
 
-export async function completeLogin(search: string): Promise<void> {
+// Resolves to the in-app path the user was on when the login began, so the
+// caller can restore it (deep links like /connect/<id> survive the redirect).
+export async function completeLogin(search: string): Promise<string | null> {
   const q = new URLSearchParams(search);
   const code = q.get("code");
   const returnedState = q.get("state");
@@ -106,6 +115,7 @@ export async function completeLogin(search: string): Promise<void> {
   });
   if (!resp.ok) throw new Error(`token exchange failed (${resp.status})`);
   store((await resp.json()) as Record<string, unknown>);
+  return flow.returnTo && !flow.returnTo.startsWith("/callback") ? flow.returnTo : null;
 }
 
 async function refresh(): Promise<boolean> {

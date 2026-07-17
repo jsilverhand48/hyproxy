@@ -4,7 +4,9 @@ Streams the three audit tables (auth_events, audit_log, policy_changes) to an
 external, append-only collector past a per-stream high-water cursor, and flags
 high-severity events for alerting. The tables are whitelist-detail by
 construction (Phase 1/2), so shipped records carry no secrets. Records are
-projected explicitly here; the ORM row is never emitted.
+projected explicitly here; the ORM row is never emitted. Projected field
+names follow the Splunk Common Information Model (Authentication / Change):
+src, user, app, action, signature, dest_port, object_category, object_id.
 
 Concurrency note (reviewer item): the cursor advances by max BigInteger id per
 batch. Because ids are assigned before commit, a row with a smaller id committing
@@ -97,14 +99,14 @@ def _fmt_auth_event(row: AuthEvent) -> dict[str, Any]:
         "stream": "auth_events",
         "id": row.id,
         "ts": row.ts.isoformat(),
-        "event_type": row.event_type,
-        "user_id": str(row.user_id) if row.user_id else None,
+        "signature": row.event_type,
+        "user": str(row.user_id) if row.user_id else None,
         "session_id": str(row.session_id) if row.session_id else None,
-        "client_id": row.client_id,
-        "source_ip": str(row.source_ip),
-        "success": row.success,
+        "app": row.client_id,
+        "src": str(row.source_ip),
+        "action": "success" if row.success else "failure",
         "detail": row.detail,
-        "severity": "high" if is_high_severity(row.event_type) else "normal",
+        "severity": "high" if is_high_severity(row.event_type) else "informational",
     }
 
 
@@ -113,13 +115,13 @@ def _fmt_audit_log(row: AuditLog) -> dict[str, Any]:
         "stream": "audit_log",
         "id": row.id,
         "ts": row.ts.isoformat(),
-        "user_id": str(row.user_id) if row.user_id else None,
+        "user": str(row.user_id) if row.user_id else None,
         "resource_id": str(row.resource_id) if row.resource_id else None,
-        "port": row.port,
-        "decision": row.decision,
+        "dest_port": row.port,
+        "action": "allowed" if row.decision == "allow" else "blocked",
         "reason": row.reason,
-        "source_ip": str(row.source_ip),
-        "severity": "high" if row.decision == "deny" else "normal",
+        "src": str(row.source_ip),
+        "severity": "high" if row.decision == "deny" else "informational",
     }
 
 
@@ -128,12 +130,12 @@ def _fmt_policy_change(row: PolicyChange) -> dict[str, Any]:
         "stream": "policy_changes",
         "id": row.id,
         "ts": row.ts.isoformat(),
-        "actor_id": str(row.actor_id),
-        "entity_type": row.entity_type,
-        "entity_id": str(row.entity_id) if row.entity_id else None,
+        "user": str(row.actor_id),
+        "object_category": row.entity_type,
+        "object_id": str(row.entity_id) if row.entity_id else None,
         "action": row.action,
         "change": row.change_json,
-        "severity": "normal",
+        "severity": "informational",
     }
 
 

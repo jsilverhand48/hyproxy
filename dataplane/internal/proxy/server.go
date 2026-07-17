@@ -326,8 +326,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// request has its connection closed with no response via ErrAbortHandler.
 	if s.botFilter != nil {
 		if blocked, reason := s.botFilter.Decide(clientIP(r), r.UserAgent()); blocked {
-			s.log.Info("bot_filter drop", "host", r.Host, "source_ip", clientIP(r),
-				"reason", reason, "user_agent", r.UserAgent())
+			s.log.Info("bot_filter drop", "site", r.Host, "src", clientIP(r),
+				"action", "blocked", "reason", reason, "http_user_agent", r.UserAgent())
 			panic(http.ErrAbortHandler)
 		}
 	}
@@ -373,7 +373,7 @@ func (s *Server) serveApp(
 	// Browsers are bounced to the login page; the IdP stays internet-reachable
 	// so admins can still authenticate, they just never get the console.
 	if route.LanOnly && !s.isLAN(clientIP(r)) {
-		s.log.Info("lan_only deny", "host", host, "source_ip", clientIP(r))
+		s.log.Info("lan_only deny", "site", host, "src", clientIP(r), "action", "blocked")
 		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && s.lanOnlyRedirect != "" {
 			http.Redirect(w, r, s.lanOnlyRedirect, http.StatusFound)
 			return

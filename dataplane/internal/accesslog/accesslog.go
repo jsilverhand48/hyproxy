@@ -73,14 +73,15 @@ func Wrap(next http.Handler, log *slog.Logger) http.Handler {
 			status = http.StatusOK
 		}
 		log.Info("access",
-			"method", r.Method,
-			"host", r.Host,
-			"path", r.URL.Path,
+			"http_method", r.Method,
+			"site", r.Host,
+			"uri_path", r.URL.Path,
+			"uri_query", r.URL.RawQuery,
 			"status", status,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"bytes", sw.bytes,
-			"client_ip", clientIP,
-			"user_agent", r.UserAgent(),
+			"response_time", time.Since(start).Milliseconds(),
+			"bytes_out", sw.bytes,
+			"src", clientIP,
+			"http_user_agent", r.UserAgent(),
 		)
 	})
 }

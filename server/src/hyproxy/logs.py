@@ -13,6 +13,10 @@ so at most log_backup_count (2) archives exist per file.
 An empty log_dir disables file logging entirely (dev default); everything
 still goes to stderr for journald / docker logs. Unhandled request errors
 reach the files through uvicorn.error propagation, wired in setup_logging.
+
+uvicorn.access lines are split into individual Splunk CIM Web fields
+(src, src_port, http_method, url, uri_path, uri_query, status) instead of
+one packed msg string.
 """
 
 import fcntl
@@ -57,6 +61,38 @@ _STANDARD_ATTRS = frozenset(
 )
 
 
+def _split_uvicorn_access(record: logging.LogRecord) -> dict[str, object] | None:
+    """Splunk CIM Web fields for a uvicorn.access record, or None to keep
+    the packed-msg fallback (anomalous args must never break logging)."""
+    if record.name != "uvicorn.access" or not isinstance(record.args, tuple):
+        return None
+    if len(record.args) != 5:
+        return None
+    try:
+        client_addr, method, full_path, http_version, status_code = record.args
+        out: dict[str, object] = {
+            "msg": "access",
+            "http_method": str(method),
+            "url": str(full_path),
+            "status": int(status_code),  # type: ignore[arg-type]
+            "http_version": str(http_version),  # non-CIM extra, kept for triage
+        }
+        addr = str(client_addr)
+        src, sep, src_port = addr.rpartition(":")  # IPv6-safe: port is after last colon
+        if sep and src_port.isdigit():
+            out["src"] = src
+            out["src_port"] = int(src_port)
+        elif addr:
+            out["src"] = addr
+        path, _, query = str(full_path).partition("?")
+        out["uri_path"] = path
+        if query:
+            out["uri_query"] = query
+        return out
+    except (TypeError, ValueError):
+        return None
+
+
 class JsonLineFormatter(logging.Formatter):
     def __init__(self, service: str) -> None:
         super().__init__()
@@ -70,6 +106,9 @@ class JsonLineFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        access = _split_uvicorn_access(record)
+        if access is not None:
+            out.update(access)
         for key, value in record.__dict__.items():
             if key not in _STANDARD_ATTRS and not key.startswith("_") and key not in out:
                 out[key] = value

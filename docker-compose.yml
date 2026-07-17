@@ -70,6 +70,9 @@ x-server-env: &server-env
   # (not the auth.localhost default). Defaults mirror hyproxy.config so an unset
   # value keeps current behavior.
   HYPROXY_AUTH_HOST: ${HYPROXY_AUTH_HOST:-auth.localhost}
+  # Guac tunnel-token key: the authz broker mints/validates guacamole-lite
+  # tokens with it; empty disables the guac endpoints (guac_disabled).
+  HYPROXY_GUAC_CYPHER_KEY: ${HYPROXY_GUAC_CYPHER_KEY:-}
   HYPROXY_EXTERNAL_SCHEME: ${HYPROXY_EXTERNAL_SCHEME:-https}
   HYPROXY_GATEWAY_COOKIE_DOMAIN: ${HYPROXY_GATEWAY_COOKIE_DOMAIN:-}
   HYPROXY_IDP_INTERNAL_URL: ${HYPROXY_IDP_INTERNAL_URL:-}
