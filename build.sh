@@ -37,7 +37,6 @@ DATAPLANE="$ROOT/dataplane"
 ENV_FILE="$ROOT/.env"
 DP_CONFIG="$DATAPLANE/config.json"
 DP_BIN="$DATAPLANE/bin/dataplane"
-RENDER="$ROOT/deploy/render-dataplane-config.sh"
 STATE_DIR="$ROOT/.build"
 IMAGE_HASH_FILE="$STATE_DIR/image.hash"
 DP_HASH_FILE="$STATE_DIR/dataplane.hash"
@@ -121,10 +120,59 @@ else
 fi
 
 # --- 1. Data-plane config (rendered artifact the data plane consumes) ---------
+# Inline mirror of the canonical template embedded in install.sh (the deploy/
+# dir is deprecated). idp and admin are proxied with auth disabled (they
+# authenticate independently); apps additionally serves the Guacamole WS
+# tunnel on its fixed /guac/tunnel path (guac_tunnel_path). Application routes
+# are DB-driven and hot-loaded from the control plane, so only the infra
+# routes are rendered here. Static routes win on host conflict.
+render_dp_config() {
+  [ -n "${HYPROXY_DOMAIN:-}" ] || die "HYPROXY_DOMAIN must be set in .env to render dataplane/config.json"
+  local dp_listen="${DP_LISTEN:-:443}"
+  local dp_tls_cert="${DP_TLS_CERT:-/etc/hyproxy/certs/fullchain.pem}"
+  local dp_tls_key="${DP_TLS_KEY:-/etc/hyproxy/certs/privkey.pem}"
+  local idp_backend="${IDP_BACKEND:-http://127.0.0.1:8300}"
+  local admin_backend="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
+  local authz_backend="${AUTHZ_BACKEND:-http://127.0.0.1:8500}"
+  local guac_backend="${GUAC_BACKEND:-http://127.0.0.1:8600}"
+  local routes_refresh="${ROUTES_REFRESH_SECS:-10}"
+  local upstream_insecure
+  case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
+    true|1|yes) upstream_insecure=true ;;
+    *) upstream_insecure=false ;;
+  esac
+  local log_dir="${HYPROXY_LOG_DIR:-/var/log/hyproxy}"
+  local log_max_bytes="${HYPROXY_LOG_MAX_BYTES:-52428800}"
+  local dp_log_level="${DP_LOG_LEVEL:-info}"
+  cat > "$DP_CONFIG" <<EOF
+{
+  "listen": "$dp_listen",
+  "tls_cert": "$dp_tls_cert",
+  "tls_key": "$dp_tls_key",
+  "authz_url": "$authz_backend",
+  "auth_host": "auth.$HYPROXY_DOMAIN",
+  "auth_backend": "$authz_backend",
+  "gateway_cookie_name": "__Secure-gw",
+  "guac_backend": "$guac_backend",
+  "routes_refresh_secs": $routes_refresh,
+  "upstream_insecure_skip_verify": $upstream_insecure,
+  "log_dir": "$log_dir",
+  "log_level": "$dp_log_level",
+  "log_max_bytes": $log_max_bytes,
+  "log_backup_count": 2,
+  "routes": {
+    "idp.$HYPROXY_DOMAIN": { "backend": "$idp_backend", "auth": false },
+    "admin.$HYPROXY_DOMAIN": { "backend": "$admin_backend", "auth": false },
+    "apps.$HYPROXY_DOMAIN": { "backend": "$admin_backend", "auth": false, "guac_tunnel_path": true }
+  }
+}
+EOF
+  log "wrote $DP_CONFIG (ingress $dp_listen, hosts: idp/admin/apps/auth.$HYPROXY_DOMAIN)"
+}
+
 if [ "$RENDER_CONFIG" = "1" ] || [ ! -f "$DP_CONFIG" ]; then
-  [ -x "$RENDER" ] || die "renderer not found or not executable: $RENDER"
   log "rendering dataplane/config.json from .env"
-  "$RENDER"
+  render_dp_config
 else
   log "dataplane/config.json present (set RENDER_CONFIG=1 to re-render)"
 fi
@@ -442,4 +490,3 @@ $(printf '\033[1;32mbuild verified; stack stopped.\033[0m')
 
 This script only builds + verifies. Use start-prod.sh to run.
 EOF
-# cleanup() runs on EXIT and stops everything.

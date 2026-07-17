@@ -6,7 +6,6 @@
 .venv/
 .env
 __pycache__/
-.serena/*
 .build/
 !.serena/project.yml
 
