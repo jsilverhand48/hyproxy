@@ -763,6 +763,40 @@ chmod 0644 /etc/systemd/system/hyproxy-dataplane.service \
            /etc/systemd/system/hyproxy-ship-logs.timer
 systemctl daemon-reload
 
+# --- 8b. kernel network tuning (BBR congestion control) ----------------------
+c_info "enabling BBR congestion control (WAN streaming throughput)"
+
+# Cubic collapses its congestion window under last-mile packet loss on long-RTT
+# WAN paths, capping high-bitrate streams (e.g. Plex) to ~1 Mbps. BBR is model-
+# not loss-based and keeps the window open under moderate loss. The data plane is
+# the sender for downstream media, so this send-side change is the lever that
+# matters. See docs/QUALITY.md.
+cat > /etc/sysctl.d/99-hyproxy-net.conf <<'EOF'
+# hyproxy: WAN streaming throughput. BBR + fq (fair-queue pacing) so a single
+# high-bitrate flow is not throttled by cubic's loss-based backoff. See
+# docs/QUALITY.md.
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+
+# Load tcp_bbr now and on every boot so the sysctl above resolves.
+echo tcp_bbr > /etc/modules-load.d/hyproxy-bbr.conf
+if modprobe tcp_bbr 2>/dev/null; then
+  sysctl --system >/dev/null
+  # default_qdisc only affects interfaces brought up later; set the live default
+  # interface too so BBR pacing is fully effective before the next reboot.
+  iface=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+  [ -n "$iface" ] && tc qdisc replace dev "$iface" root fq 2>/dev/null || true
+  cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+  if [ "$cc" = bbr ]; then
+    c_info "congestion control now: bbr"
+  else
+    c_warn "BBR drop-in written but active cc is '$cc'; verify after reboot"
+  fi
+else
+  c_warn "tcp_bbr module unavailable on this kernel; drop-in left in place for a kernel that has it"
+fi
+
 # --- 9. Start the stack ------------------------------------------------------
 c_info "starting the control plane (containers, as the hyproxy user)"
 PROFILES="--profile app"
