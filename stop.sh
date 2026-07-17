@@ -74,7 +74,7 @@ fi
 # --- 5. systemd units (production installs only) -----------------------------
 step "systemd units"
 if command -v systemctl >/dev/null 2>&1; then
-  for unit in hyproxy-dataplane.service hyproxy-acme.timer hyproxy-acme.service; do
+  for unit in hyproxy.service hyproxy-acme.timer hyproxy-acme.service; do
     if systemctl cat "$unit" >/dev/null 2>&1; then
       if systemctl is-active --quiet "$unit"; then
         if systemctl stop "$unit" 2>/dev/null; then

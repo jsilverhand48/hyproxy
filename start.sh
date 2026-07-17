@@ -217,8 +217,12 @@ $(printf '\033[1;32mhyproxy staging is up.\033[0m')
 Point idp./admin./auth.$HYPROXY_DOMAIN at this VM's LAN IP (LAN DNS or /etc/hosts).
 Container logs:  docker compose ${PROFILES[*]} logs -f
 The data plane runs in the foreground here; Ctrl-C stops it and the containers.
-For persistence, install deploy/systemd/hyproxy-dataplane.service instead (docs/staging.md).
+For persistence, enable the hyproxy.service systemd unit instead (install.sh writes it).
 EOF
 
-wait "$DP_PID" 2>/dev/null || true
-warn "the data plane exited; stopping the stack"
+# Propagate the data-plane exit status so a supervisor (hyproxy.service with
+# Restart=on-failure) sees a crash as a failure; the EXIT trap still cleans up.
+rc=0
+wait "$DP_PID" 2>/dev/null || rc=$?
+warn "the data plane exited (status $rc); stopping the stack"
+exit "$rc"

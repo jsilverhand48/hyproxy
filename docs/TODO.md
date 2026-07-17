@@ -122,3 +122,4 @@ below are what remains.
 - [x] QR code for 2FA standard users
 - [ ] Sunset file based masterkey and secret
 - [ ] Validate docker based tpm backend is best approach
+- [x] Fix install.sh, systemd unit file should run the ./start.sh script and the build.sh file should not start any processes on build go dataplane and any ui parts that need to be built

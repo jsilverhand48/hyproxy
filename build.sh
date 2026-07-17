@@ -19,9 +19,10 @@
 #   --clean   rebuild the whole stack regardless of detected changes (image is
 #             rebuilt --no-cache; the data-plane binary is rebuilt from scratch).
 #
-# Scope: this BUILDS and VERIFIES. It does NOT deploy: it never touches the
-# hyproxy-dataplane systemd unit and never copies the binary into /opt (that is
-# a deploy step; see docs/UPDATES.md).
+# Scope: this BUILDS and VERIFIES. It does NOT deploy or start anything, with
+# one exception: it writes the hyproxy.service systemd unit (whole-stack
+# supervisor: start.sh/stop.sh) if it does not exist yet. It never starts that
+# unit and never copies the binary into /opt (see docs/UPDATES.md).
 #
 # Env toggles:
 #   RENDER_CONFIG=1   re-render dataplane/config.json from .env even if present
@@ -291,7 +292,7 @@ cleanup() {
   # --- 5. systemd units (production installs only) -----------------------------
   step "systemd units"
   if command -v systemctl >/dev/null 2>&1; then
-    for unit in hyproxy-dataplane.service hyproxy-acme.timer hyproxy-acme.service; do
+    for unit in hyproxy.service hyproxy-acme.timer hyproxy-acme.service; do
       if systemctl cat "$unit" >/dev/null 2>&1; then
         if systemctl is-active --quiet "$unit"; then
           if systemctl stop "$unit" 2>/dev/null; then
@@ -388,7 +389,49 @@ fi
 
 [ "$FAILED" = "0" ] || die "one or more components did not verify as functional."
 
-# --- 7. Summary --------------------------------------------------------------
+# --- 7. Whole-stack systemd unit (created only if missing) --------------------
+# hyproxy.service supervises the entire stack via start.sh/stop.sh. install.sh
+# writes the same unit on a fresh install; this covers boxes updated in place.
+UNIT_PATH=/etc/systemd/system/hyproxy.service
+if command -v systemctl >/dev/null 2>&1 && [ ! -f "$UNIT_PATH" ]; then
+  log "installing $UNIT_PATH (whole-stack supervisor)"
+  UNIT_TMP="$STATE_DIR/hyproxy.service.tmp"
+  INSTALL_DIR="${HYPROXY_INSTALL_DIR:-/opt/hyproxy}"
+  cat > "$UNIT_TMP" <<UNIT
+[Unit]
+Description=hyproxy stack (control-plane containers + baremetal data plane)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+User=hyproxy
+Group=hyproxy
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/start.sh
+ExecStop=$INSTALL_DIR/stop.sh
+Restart=on-failure
+RestartSec=5
+# The data plane (a child of start.sh) binds :443 without root; ambient caps
+# are inherited across exec by non-root children.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  AS_ROOT=()
+  [ "$(id -u)" != "0" ] && AS_ROOT=(sudo -n)
+  if "${AS_ROOT[@]}" install -m 0644 "$UNIT_TMP" "$UNIT_PATH" 2>/dev/null \
+     && "${AS_ROOT[@]}" systemctl daemon-reload 2>/dev/null; then
+    log "installed $UNIT_PATH (enable with: systemctl enable --now hyproxy)"
+    rm -f "$UNIT_TMP"
+  else
+    # Leave the rendered unit behind so the manual command below works.
+    warn "could not install $UNIT_PATH (need root); run: sudo install -m 0644 $UNIT_TMP $UNIT_PATH && sudo systemctl daemon-reload"
+  fi
+fi
+
+# --- 8. Summary --------------------------------------------------------------
 cat <<EOF
 
 $(printf '\033[1;32mbuild verified; stack stopped.\033[0m')

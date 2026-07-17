@@ -663,12 +663,13 @@ if have getenforce && [ "$(getenforce)" != "Disabled" ]; then
   restorecon -v "$f"
 fi
 
-# Supervise the baremetal Go data plane (the single LAN TLS ingress). The
-# containers are managed by docker compose; this unit keeps the public edge
-# restarting on failure.
-cat > /etc/systemd/system/hyproxy-dataplane.service <<EOF
+# Supervise the WHOLE stack through the repo launcher: start.sh brings up the
+# compose services and runs the baremetal data plane in the foreground, so this
+# one unit restarts everything on failure. Created only if missing.
+if [ ! -f /etc/systemd/system/hyproxy.service ]; then
+cat > /etc/systemd/system/hyproxy.service <<EOF
 [Unit]
-Description=hyproxy data plane (LAN TLS ingress)
+Description=hyproxy stack (control-plane containers + baremetal data plane)
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
@@ -676,25 +677,19 @@ Requires=docker.service
 [Service]
 User=hyproxy
 Group=hyproxy
-WorkingDirectory=$HYPROXY_INSTALL_DIR/dataplane
-ExecStart=$HYPROXY_INSTALL_DIR/dataplane/bin/dataplane -config config.json
+WorkingDirectory=$HYPROXY_INSTALL_DIR
+ExecStart=$HYPROXY_INSTALL_DIR/start.sh
+ExecStop=$HYPROXY_INSTALL_DIR/stop.sh
 Restart=on-failure
-RestartSec=2
-# Bind :443 without full root.
+RestartSec=5
+# The data plane (a child of start.sh) binds :443 without root; ambient caps
+# are inherited across exec by non-root children.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadOnlyPaths=/etc/hyproxy/certs
-# The centralized log dir must stay writable under ProtectSystem=strict.
-# ReadWritePaths (not LogsDirectory=) so the configurable base dir is honored
-# and the shared dir's container-writable ownership is never chowned.
-ReadWritePaths=$HYPROXY_LOG_DIR
-PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
 EOF
+fi
 
 # Issue/renew the wildcard cert via DNS-01 and install it into the data-plane
 # cert paths. Oneshot, driven by hyproxy-acme.timer.
@@ -756,7 +751,7 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-chmod 0644 /etc/systemd/system/hyproxy-dataplane.service \
+chmod 0644 /etc/systemd/system/hyproxy.service \
            /etc/systemd/system/hyproxy-acme.service \
            /etc/systemd/system/hyproxy-acme.timer \
            /etc/systemd/system/hyproxy-ship-logs.service \
@@ -825,8 +820,8 @@ if [ -n "$OLD_KEY_FILE" ]; then
   shred -u "$OLD_KEY_FILE"
 fi
 
-c_info "enabling + starting the data plane, renewal timer, and log shipping timer"
-systemctl enable --now hyproxy-dataplane
+c_info "enabling + starting the stack, renewal timer, and log shipping timer"
+systemctl enable --now hyproxy
 systemctl enable --now hyproxy-acme.timer
 systemctl enable --now hyproxy-ship-logs.timer
 
@@ -837,7 +832,7 @@ cat <<EOF
 
 hyproxy is installed at $HYPROXY_INSTALL_DIR and running.
 
-  Public ingress : :443 (data plane, systemd 'hyproxy-dataplane')
+  Public ingress : :443 (data plane, part of the systemd 'hyproxy' stack unit)
   Control plane  : idp/admin/authz containers on 127.0.0.1
   Cert renewal   : hyproxy-acme.timer (daily, runs as 'hyproxy')
   Logs           : $HYPROXY_LOG_DIR (JSON lines, 50 MB rotation, 2 archives kept;
