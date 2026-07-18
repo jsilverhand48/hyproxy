@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 #
 # build.sh: build the hyproxy stack from current source, verify it is
-# functional, then STOP everything. Leaves NOTHING running.
+# functional, then stop everything. Leaves nothing running.
 #
-# Builds the hyproxy app and dataplane. it does not start the data plane and does 
-# not leave containers up. It brings the stack up only long enough to smoke-test it, 
-# then tears it all down. No lingering processes, containers, or networks remain 
-# when the script exits.
+# Builds the control-plane image and the data-plane binary. The containers are
+# brought up only long enough to smoke-test them, then torn down. The exit
+# cleanup also stops anything else hyproxy-related it finds on the box
+# (systemd units, the data-plane binary, uvicorn apps, stray containers), so
+# running this on a live machine takes the stack down; use start.sh to bring
+# it back up. No lingering processes, containers, or networks remain when the
+# script exits.
 #
 # Incremental by default: each component is rebuilt only when ITS OWN source
 # inputs changed since the last successful build (content hashes cached under
@@ -19,16 +22,16 @@
 #   --clean   rebuild the whole stack regardless of detected changes (image is
 #             rebuilt --no-cache; the data-plane binary is rebuilt from scratch).
 #
-# Scope: this BUILDS and VERIFIES. It does NOT deploy or start anything, with
-# one exception: it writes the hyproxy.service systemd unit (whole-stack
-# supervisor: start.sh/stop.sh) if it does not exist yet. It never starts that
-# unit and never copies the binary into /opt (see docs/UPDATES.md).
+# Scope: this builds and verifies. Its only install-side effect is writing
+# the hyproxy.service systemd unit (whole-stack supervisor: start.sh/stop.sh)
+# if it does not exist yet. It never enables or starts that unit and never
+# copies the binary into /opt.
 #
 # Env toggles:
 #   RENDER_CONFIG=1   re-render dataplane/config.json from .env even if present
 #   SKIP_DATAPLANE=1  build/verify the containers only (skip the data-plane binary)
 #
-# Run from the repo root, with a valid .env (see docs/prod.md).
+# Run from the repo root, with a valid .env
 
 set -euo pipefail
 
@@ -64,24 +67,23 @@ log "preflight: toolchain + config"
 command -v docker >/dev/null || die "docker not found."
 docker compose version >/dev/null 2>&1 || die "the Docker Compose v2 plugin is required."
 docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable."
-[ -f "$ENV_FILE" ] || die "no .env at repo root (copy .env.prod.example; see docs/prod.md)."
+[ -f "$ENV_FILE" ] || die "no .env at repo root (copy .env.example)."
 
 # .env must be exported before the image build so Vite bakes the real issuer
 # (VITE_IDP_ISSUER <- HYPROXY_ISSUER) into the SPA; without it the served UI
-# would target the localhost dev issuer and login would break.
+# would target the compose file's localhost placeholder issuer and login
+# would break.
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 set +a
 
-# TPM secrets backend: the device passthrough is built into docker-compose.yml
-# (x-tpm-access) via HYPROXY_TPM_DEVICE / TSS_GID substitutions with no-op
-# defaults for the file backend; resolve and validate them here.
-if [ "${HYPROXY_SECRETS_BACKEND:-file}" = "tpm" ]; then
-  export HYPROXY_TPM_DEVICE="${HYPROXY_TPM_DEVICE:-/dev/tpmrm0}"
-  : "${TSS_GID:?TSS_GID must be set in .env to the gid of the host 'tss' group}"
-  : "${HYPROXY_TPM_SEALED_BLOB:?HYPROXY_TPM_SEALED_BLOB must be set in .env (persistent handle of the sealed master key)}"
-fi
+# The master key is sealed in the TPM; the device passthrough is built into
+# docker-compose.yml (x-tpm-access) via HYPROXY_TPM_DEVICE / TSS_GID
+# substitutions. Resolve and validate them here; missing values fail closed.
+export HYPROXY_TPM_DEVICE="${HYPROXY_TPM_DEVICE:-/dev/tpmrm0}"
+: "${TSS_GID:?TSS_GID must be set in .env to the gid of the host 'tss' group}"
+: "${HYPROXY_TPM_SEALED_BLOB:?HYPROXY_TPM_SEALED_BLOB must be set in .env (persistent handle of the sealed master key)}"
 
 log "preflight: config values"
 : "${HYPROXY_ISSUER:?HYPROXY_ISSUER must be set in .env}"
@@ -100,13 +102,6 @@ if [ -n "${HYPROXY_DOMAIN:-}" ]; then
 fi
 export HYPROXY_EXTERNAL_SCHEME="${HYPROXY_EXTERNAL_SCHEME:-https}"
 
-# The file backend needs a real key file; the TPM backend keeps the key in the
-# TPM (the compose master_key secret points at /dev/null and is never read).
-if [ "${HYPROXY_SECRETS_BACKEND:-file}" != "tpm" ]; then
-  MASTER_KEY_FILE="${HYPROXY_MASTER_KEY_FILE:-$ROOT/server/.dev/master.keys}"
-  [ -f "$MASTER_KEY_FILE" ] || die "master key not found at $MASTER_KEY_FILE (run bootstrap-prod.sh / cli bootstrap-keys first)."
-fi
-
 # guac is a container too: include it only when its key is set, so its image is
 # built and its inputs (tunnel/) count toward the control-plane build hash.
 PROFILES=(--profile app)
@@ -120,8 +115,8 @@ else
 fi
 
 # --- 1. Data-plane config (rendered artifact the data plane consumes) ---------
-# Inline mirror of the canonical template embedded in install.sh (the deploy/
-# dir is deprecated). idp and admin are proxied with auth disabled (they
+# Inline mirror of the canonical template embedded in install.sh; keep the two
+# in sync. idp and admin are proxied with auth disabled (they
 # authenticate independently); apps additionally serves the Guacamole WS
 # tunnel on its fixed /guac/tunnel path (guac_tunnel_path). Application routes
 # are DB-driven and hot-loaded from the control plane, so only the infra
@@ -267,11 +262,13 @@ fi
 cleanup() {
   log "stopping everything (leaving nothing running)"
   "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
-  # compose down only reaps THIS build's stack. Control-plane processes started
-  # outside compose (uvicorn idp/admin/authz via start-dev.sh or `make run-*`,
-  # the data plane, the dev Postgres) would otherwise survive and break the
-  # "nothing running" guarantee, so hand off to the comprehensive stopper.
-  
+  # compose down only reaps THIS build's stack. Anything running outside
+  # compose (the data-plane binary, uvicorn idp/admin/authz, Vite/tunnel Node
+  # processes, the hyproxy systemd units, a user-space Postgres cluster) would
+  # otherwise survive and break the "nothing running" guarantee. The rest of
+  # this function is a superset of stop.sh inlined; keep the shared sections
+  # in sync with it.
+
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   info() { printf '  %s\n' "$*"; }
@@ -301,10 +298,10 @@ cleanup() {
     fi
   }
 
-  # --- 1. Frontend dev servers (Vite UI + guac tunnel) -------------------------
-  step "frontend dev servers"
-  kill_pat "ui dev server (vite)" "${ROOT}/ui/node_modules/.*vite"
-  kill_pat "guac tunnel"          "${ROOT}/tunnel/node_modules/.*(vite|tunnel)|${ROOT}/tunnel .*npm"
+  # --- 1. Frontend Node processes (Vite UI + guac tunnel) ----------------------
+  step "frontend processes"
+  kill_pat "ui server (vite)" "${ROOT}/ui/node_modules/.*vite"
+  kill_pat "guac tunnel"      "${ROOT}/tunnel/node_modules/.*(vite|tunnel)|${ROOT}/tunnel .*npm"
 
   # --- 2. Go data plane --------------------------------------------------------
   step "data plane"
@@ -337,7 +334,7 @@ cleanup() {
     info "docker not installed; skipping containers"
   fi
 
-  # --- 5. systemd units (production installs only) -----------------------------
+  # --- 5. systemd units -----------------------------
   step "systemd units"
   if command -v systemctl >/dev/null 2>&1; then
     for unit in hyproxy.service hyproxy-acme.timer hyproxy-acme.service; do
@@ -357,14 +354,14 @@ cleanup() {
     info "systemctl not available; skipping units"
   fi
 
-  # --- 6. Postgres dev cluster (user-space pgserver) ---------------------------
-  step "postgres dev cluster"
+  # --- 6. User-space Postgres cluster (scripts/devdb.py) -----------------------
+  step "user-space postgres cluster"
   if [ -d "${ROOT}/server/.dev" ] && command -v uv >/dev/null 2>&1; then
     (cd "${ROOT}/server" && uv run python scripts/devdb.py stop 2>/dev/null) \
-      && info "dev cluster stopped" \
-      || info "dev cluster not running"
+      && info "user-space cluster stopped" \
+      || info "user-space cluster not running"
   else
-    info "no user-space dev cluster (server/.dev absent or uv missing)"
+    info "no user-space cluster (server/.dev absent or uv missing)"
   fi
 
   step "done - hyproxy stopped"
@@ -422,7 +419,7 @@ for svc in idp admin authz; do
 done
 
 # The data plane binds :443 with TLS and forward-auths against the running
-# control plane, so a full runtime check belongs to start-prod.sh, not to a
+# control plane, so a full runtime check belongs to start.sh, not to a
 # build. Here the functional guarantee is that it compiled and produced an
 # executable binary (the build above would have failed otherwise).
 if [ "$SKIP_DATAPLANE" != "1" ]; then
@@ -488,5 +485,5 @@ $(printf '\033[1;32mbuild verified; stack stopped.\033[0m')
   Data plane $([ "$SKIP_DATAPLANE" = "1" ] && echo "skipped (SKIP_DATAPLANE=1)" || { [ "$NEED_DP" = "1" ] && echo "binary rebuilt" || echo "binary reused"; })
   Containers verified healthy, then stopped (no lingering processes)
 
-This script only builds + verifies. Use start-prod.sh to run.
+This script only builds + verifies. Use start.sh to run.
 EOF

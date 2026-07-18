@@ -1,10 +1,10 @@
 """Master-key rotation: re-wrap every sealed blob under the backend's current
 master key.
 
-This is the migration path whenever a new master key becomes current, most
-importantly when moving from the dev FileSecretsBackend to the TPM-backed broker
-(Phase 5): add the TPM-sealed key as current, run this to re-wrap all ciphertext
-to it, then retire the old key. Every envelope carries the id of the master key
+This is the migration path whenever a new master key becomes current, e.g.
+when the TPM blob is resealed with a fresh key: add the new key as current,
+run this to re-wrap all ciphertext to it, then retire the old key. Every
+envelope carries the id of the master key
 that sealed it, so old ciphertext keeps decrypting until it is re-wrapped; the
 whole pass runs in one transaction.
 """

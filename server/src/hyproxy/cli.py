@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hyproxy.config import get_settings
 from hyproxy.core import keys as key_service
-from hyproxy.core.secrets import generate_master_key_file, get_secrets_backend
+from hyproxy.core.secrets import get_secrets_backend
 from hyproxy.db.engine import db_session
 from hyproxy.db.models import DpopJtiSeen, GuacGrant, LoginFlow, OAuthClient, User
 from hyproxy.logs import setup_logging
@@ -28,14 +28,6 @@ def run_db[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
 def cli() -> None:
     """hyproxy management commands."""
     setup_logging("cli")
-
-
-@cli.command("gen-keys")
-def gen_keys() -> None:
-    """Generate (or add a key to) the dev master key file."""
-    path = Path(get_settings().master_key_file)
-    key_id = generate_master_key_file(path)
-    click.echo(f"wrote master key {key_id} to {path}")
 
 
 @cli.command("rotate-signing-key")
@@ -182,9 +174,9 @@ def bootstrap_gateway_client() -> None:
 def rotate_master_key() -> None:
     """Re-wrap every sealed blob under the current master key.
 
-    Run after a new master key becomes current (e.g. migrating from the file
-    backend to the TPM-sealed key): add the new key, then rotate so all TOTP
-    secrets, signing keys, and connection secrets are re-encrypted to it."""
+    Run after a new master key becomes current (e.g. after resealing the TPM
+    blob with a fresh key): add the new key, then rotate so all TOTP secrets,
+    signing keys, and connection secrets are re-encrypted to it."""
     from hyproxy.core.reencrypt import rotate_to_current
 
     backend = get_secrets_backend()

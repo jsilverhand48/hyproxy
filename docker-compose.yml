@@ -9,7 +9,7 @@
 # only, so nothing is internet-facing; only the host data plane reaches it.
 #
 # Profiles:
-#   (default)  postgres only            -> dev `make up`
+#   (default)  postgres only            -> `make up`
 #   tools      migrate + cli one-shots  -> `docker compose run --rm migrate|cli ...`
 #   app        idp + admin + authz      -> `docker compose --profile app up -d`
 #   guac       guacd + tunnel           -> add `--profile guac` when guac is enabled
@@ -39,12 +39,10 @@ x-server-build: &server-build
 x-server-env: &server-env
   HYPROXY_DB_URL: postgresql+asyncpg://hyproxy:${POSTGRES_PASSWORD:-devonly}@postgres:5432/hyproxy
   HYPROXY_ISSUER: ${HYPROXY_ISSUER:-https://idp.localhost:8300}
-  HYPROXY_SECRETS_BACKEND: ${HYPROXY_SECRETS_BACKEND:-file}
-  HYPROXY_MASTER_KEY_FILE: /run/secrets/master_key
-  # TPM secrets backend (HYPROXY_SECRETS_BACKEND=tpm): persistent handle of the
-  # sealed master key and the PCR selection it was sealed under (must match
-  # sealing time). Unused (empty) under the default file backend.
-  HYPROXY_TPM_SEALED_BLOB: ${HYPROXY_TPM_SEALED_BLOB:-}
+  # TPM secrets backend (the only backend): persistent handle of the sealed
+  # master key and the PCR selection it was sealed under (must match sealing
+  # time). Interpolation fails hard when the handle is unset.
+  HYPROXY_TPM_SEALED_BLOB: ${HYPROXY_TPM_SEALED_BLOB:?persistent handle of the TPM-sealed master key (install.sh writes it to .env)}
   HYPROXY_TPM_PCRS: ${HYPROXY_TPM_PCRS:-sha256:0,2,4,7}
   # The IdP needs this too, not just the admin app: it scopes the IdP's CORS
   # allowance (idp/app.py) and validates the step-up return_to
@@ -88,21 +86,17 @@ x-server-env: &server-env
   HYPROXY_LOG_LEVEL: ${HYPROXY_LOG_LEVEL:-INFO}
   HYPROXY_LOG_MAX_BYTES: ${HYPROXY_LOG_MAX_BYTES:-52428800}
 
-# TPM secrets backend: pass the host TPM resource-manager device into every
-# control-plane service that needs the master key, so tpm_unseal
+# The master key lives sealed in the TPM: pass the host TPM resource-manager
+# device into every control-plane service that needs it, so tpm_unseal
 # (core/secrets.py) can run tpm2_unseal inside the container. The container
 # user (uid 10001) is not in the host 'tss' group that owns the device, so its
 # numeric gid is granted via group_add; install.sh resolves it into TSS_GID in
-# .env and sets HYPROXY_TPM_DEVICE=/dev/tpmrm0 (plus
-# HYPROXY_MASTER_KEY_FILE=/dev/null so the master_key secret below resolves
-# without unsealed key material on disk). Under the default file backend both
-# defaults are no-ops: /dev/null is mapped onto itself and the container
-# user's own gid is re-added.
+# .env. Interpolation fails hard when TSS_GID is unset.
 x-tpm-access: &tpm-access
   devices:
-    - "${HYPROXY_TPM_DEVICE:-/dev/null}:${HYPROXY_TPM_DEVICE:-/dev/null}"
+    - "${HYPROXY_TPM_DEVICE:-/dev/tpmrm0}:${HYPROXY_TPM_DEVICE:-/dev/tpmrm0}"
   group_add:
-    - "${TSS_GID:-10001}"
+    - "${TSS_GID:?gid of the host 'tss' group (install.sh writes it to .env)}"
 
 x-healthcheck-defaults: &healthcheck-defaults
   interval: 5s
@@ -137,17 +131,12 @@ services:
     image: hyproxy-server:local
     command: ["alembic", "upgrade", "head"]
     environment: *server-env
-    secrets: [master_key]
     depends_on:
       postgres:
         condition: service_healthy
     networks: [internal]
     restart: "no"
 
-  # Run management commands, e.g.
-  #   docker compose run --rm cli bootstrap-keys
-  #   docker compose run --rm cli bootstrap-admin --email you@example.com --name "You"
-  #   docker compose run --rm cli create-client --client-id admin-ui --name "Admin UI" --redirect-uri ...
   cli:
     <<: *tpm-access
     profiles: [tools]
@@ -155,7 +144,6 @@ services:
     image: hyproxy-server:local
     entrypoint: ["python", "-m", "hyproxy.cli"]
     environment: *server-env
-    secrets: [master_key]
     volumes:
       - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     depends_on:
@@ -178,7 +166,6 @@ services:
       - "--proxy-headers"
       - "--forwarded-allow-ips=*"
     environment: *server-env
-    secrets: [master_key]
     volumes:
       - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
@@ -205,7 +192,6 @@ services:
       - "--proxy-headers"
       - "--forwarded-allow-ips=*"
     environment: *server-env
-    secrets: [master_key]
     volumes:
       - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
@@ -235,7 +221,6 @@ services:
       - "--proxy-headers"
       - "--forwarded-allow-ips=*"
     environment: *server-env
-    secrets: [master_key]
     volumes:
       - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
     ports:
@@ -299,11 +284,3 @@ networks:
 
 volumes:
   pgdata:
-
-secrets:
-  # File secrets backend: the master key is mounted read-only into the control
-  # plane. For the TPM backend the device passthrough (x-tpm-access above)
-  # supplies the key; set HYPROXY_MASTER_KEY_FILE=/dev/null in .env so this
-  # secret still resolves without unsealed key material on disk.
-  master_key:
-    file: ${HYPROXY_MASTER_KEY_FILE:-./server/.dev/master.keys}

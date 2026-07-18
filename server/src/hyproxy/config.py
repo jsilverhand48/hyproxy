@@ -18,12 +18,9 @@ class Settings(BaseSettings):
     # Async engine pool, per process (each app process holds its own pool).
     db_pool_size: int = 10
     db_max_overflow: int = 10
-    master_key_file: str = "./.dev/master.keys"
-    # Secrets backend: "file" (dev, key on disk) or "tpm" (production, master key
-    # sealed to the TPM and unsealed into memory only). See core/secrets.py.
-    secrets_backend: str = "file"
-    # Path to the TPM-sealed master-key blob (used only when secrets_backend=tpm;
-    # unsealed via tpm2-tools at startup). See docs/production.md.
+    # Persistent handle of the TPM-sealed master-key blob (unsealed via
+    # tpm2-tools at startup; the TPM is the only secrets backend). See
+    # core/secrets.py.
     tpm_sealed_blob: str = ""
     # PCR selection the blob was sealed under. MUST match sealing time exactly
     # (tpm2_unseal re-satisfies the policy with it); see docs/TPM_STEPS.md.
@@ -44,12 +41,6 @@ class Settings(BaseSettings):
             if hostval and not hostval.startswith("/") and "://" not in hostval:
                 v = prefix + marker + str((SERVER_DIR / hostval).resolve())
         return v
-
-    @field_validator("master_key_file")
-    @classmethod
-    def _absolutize_key_file(cls, v: str) -> str:
-        p = Path(v)
-        return str(p if p.is_absolute() else (SERVER_DIR / p).resolve())
 
     issuer: str = "https://idp.localhost:8300"
 

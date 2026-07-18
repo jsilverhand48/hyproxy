@@ -18,9 +18,7 @@ Do not:
 - The mk-2 / key-rotation e2e tests are order-dependent and flaky. Ignore failures there. Do NOT investigate them or try to prove they are pre-existing.
 
 ## Debugging
-- ssh into staging to parse logs and check whats wrong using "ssh hyproxy-dev" and then cd into ~/hyproxy
+- ssh into remote host to parse logs and check whats wrong using "ssh hyproxy" and then cd into /opt/hyproxy
 - rebuild after any changes using ./build.sh --clean
 - stop all processes using ./stop.sh
-- start staging using ./start-staging.sh
 - make changes on the remote host
-- mirror any changes you make in staging to the local project repo after the goal is achieved

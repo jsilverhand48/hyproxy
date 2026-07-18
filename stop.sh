@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# stop.sh - stop everything hyproxy on this machine: local dev processes, the
-# Docker Compose stack, any installed systemd units, and the user-space Postgres
-# dev cluster. Idempotent and safe to re-run; process matches are anchored to
-# this repo so it will not touch unrelated programs.
+# stop.sh - stop the full hyproxy stack on this machine: the baremetal Go data
+# plane, the uvicorn control-plane apps, the Docker Compose services, and the
+# hyproxy systemd units. Idempotent and safe to re-run; systemd also invokes it
+# as the ExecStop of hyproxy.service.
 
 set -u
 
@@ -11,8 +11,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 info() { printf '  %s\n' "$*"; }
 step() { printf '==> %s\n' "$*"; }
 
-# Gracefully TERM, then KILL after a short grace period, every process whose
-# full command line matches an extended-regex pattern.
+# TERM every process whose full command line matches the extended-regex
+# pattern, wait up to ~2s for them to exit, then SIGKILL any survivors.
+# $pids is intentionally unquoted so it expands into one argument per PID.
 kill_pat() {
   local desc="$1" pat="$2" pids
   pids="$(pgrep -f "$pat" 2>/dev/null || true)"
@@ -21,7 +22,6 @@ kill_pat() {
     return
   fi
   info "$desc: stopping ($(echo "$pids" | tr '\n' ' '))"
-  # shellcheck disable=SC2086
   kill $pids 2>/dev/null || true
   for _ in 1 2 3 4 5 6; do
     sleep 0.3
@@ -30,48 +30,28 @@ kill_pat() {
   pids="$(pgrep -f "$pat" 2>/dev/null || true)"
   if [ -n "$pids" ]; then
     info "$desc: forcing (SIGKILL)"
-    # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
   fi
 }
 
-# --- 1. Frontend dev servers (Vite UI + guac tunnel) -------------------------
-step "frontend dev servers"
-kill_pat "ui dev server (vite)" "${ROOT}/ui/node_modules/.*vite"
-kill_pat "guac tunnel"          "${ROOT}/tunnel/node_modules/.*(vite|tunnel)|${ROOT}/tunnel .*npm"
 
-# --- 2. Go data plane --------------------------------------------------------
+# --- 1. Go data plane --------------------------------------------------------
+# The public TLS ingress binary (dataplane/bin/dataplane) launched by start.sh.
 step "data plane"
 kill_pat "dataplane binary" "bin/dataplane( |$)|/dataplane/bin/dataplane"
 
-# --- 3. Control-plane apps (uvicorn: idp / admin / authz) ---------------------
+# --- 2. Control-plane apps (uvicorn: idp / admin / authz) --------------------
+# These normally run inside the compose stack (brought down next), but pgrep
+# also sees containerized processes, so this catches those as well as any
+# instance that was launched directly on the host.
 step "control-plane apps"
 kill_pat "uvicorn (idp/admin/authz)" "uvicorn hyproxy\.(idp|admin|authz)\.app:app"
 
-# --- 4. Docker Compose stack -------------------------------------------------
-step "docker containers"
-if command -v docker >/dev/null 2>&1; then
-  if [ -f "${ROOT}/docker-compose.yml" ]; then
-    # `down` removes every service in the project regardless of profile; name it
-    # explicitly so we hit the stack even when run from elsewhere.
-    (cd "$ROOT" && docker compose -p hyproxy down --remove-orphans 2>/dev/null) \
-      && info "compose project 'hyproxy' brought down" \
-      || info "compose down reported nothing to do"
-  else
-    info "no docker-compose.yml here; skipping compose"
-  fi
-  # Belt and suspenders: stop any stray containers named hyproxy-*.
-  cids="$(docker ps -q --filter 'name=hyproxy-' 2>/dev/null || true)"
-  if [ -n "$cids" ]; then
-    info "stopping leftover hyproxy-* containers"
-    # shellcheck disable=SC2086
-    docker stop $cids >/dev/null 2>&1 || true
-  fi
-else
-  info "docker not installed; skipping containers"
-fi
-
-# --- 5. systemd units (production installs only) -----------------------------
+# --- 3. systemd units --------------------------------------------------------
+# Stops hyproxy.service plus the ACME renewal timer and oneshot, if installed.
+# hyproxy.service's ExecStop is this script, so stopping it re-runs stop.sh;
+# the nested run finds nothing left and exits cleanly. A stop failure usually
+# means this shell lacks privileges for systemctl.
 step "systemd units"
 if command -v systemctl >/dev/null 2>&1; then
   for unit in hyproxy.service hyproxy-acme.timer hyproxy-acme.service; do
@@ -91,14 +71,27 @@ else
   info "systemctl not available; skipping units"
 fi
 
-# --- 6. Postgres dev cluster (user-space pgserver) ---------------------------
-step "postgres dev cluster"
-if [ -d "${ROOT}/server/.dev" ] && command -v uv >/dev/null 2>&1; then
-  (cd "${ROOT}/server" && uv run python scripts/devdb.py stop 2>/dev/null) \
-    && info "dev cluster stopped" \
-    || info "dev cluster not running"
+# --- 4. Docker Compose stack -------------------------------------------------
+step "docker containers"
+if command -v docker >/dev/null 2>&1; then
+  if [ -f "${ROOT}/docker-compose.yml" ]; then
+    # `down` on the explicit project (matching `name: hyproxy` in
+    # docker-compose.yml) removes services from every profile, not just the
+    # ones start.sh enabled.
+    (cd "$ROOT" && docker compose -p hyproxy down --remove-orphans 2>/dev/null) \
+      && info "compose project 'hyproxy' brought down" \
+      || info "compose down reported nothing to do"
+  else
+    info "no docker-compose.yml here; skipping compose"
+  fi
+  # Catch stray hyproxy-* containers that are no longer part of the project.
+  cids="$(docker ps -q --filter 'name=hyproxy-' 2>/dev/null || true)"
+  if [ -n "$cids" ]; then
+    info "stopping leftover hyproxy-* containers"
+    docker stop $cids >/dev/null 2>&1 || true
+  fi
 else
-  info "no user-space dev cluster (server/.dev absent or uv missing)"
+  info "docker not installed; skipping containers"
 fi
 
 step "done - hyproxy stopped"

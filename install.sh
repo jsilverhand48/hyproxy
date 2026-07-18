@@ -1,12 +1,17 @@
 #!/bin/sh
 #
-# install.sh: one-command production installer for hyproxy (Rocky Linux only).
+# install.sh: one-command installer for hyproxy (Rocky Linux only).
 #
 # Usage (review first is recommended over piping straight to a shell):
 #   curl -fsSL https://raw.githubusercontent.com/jsilverhand48/hyproxy/master/install.sh | sh
 #   # safer:
 #   curl -fsSL https://raw.githubusercontent.com/jsilverhand48/hyproxy/master/install.sh -o install.sh
 #   less install.sh && sh install.sh
+#
+# Hybrid model: the control plane runs in containers; the Go data plane runs
+# on baremetal. This single script takes a host from bare Rocky Linux to a
+# running stack. It is fail-closed and idempotent where possible; re-running
+# is safe.
 #
 # If a complete .env already exists ($HYPROXY_INSTALL_DIR/.env from a previous
 # run, or a .env in the directory the installer is launched from), it is reused
@@ -20,32 +25,44 @@
 #     FIPS backup device, and never touches disk,
 #   - writes a single service-account-owned .env (0600) with everything the
 #     stack needs, including the ACME DNS-01 provider credentials,
-#   - runs bootstrap.sh (installs deps, opens the firewall, builds images,
-#     migrates, creates the first admin, builds the data-plane binary); on a
-#     re-run the break-glass admin gets a FRESH one-time temporary password,
+#   - installs the missing host toolchain (Docker CE, Go, make, uv, lego),
+#   - opens the public data-plane port in firewalld (the control-plane ports
+#     are published on 127.0.0.1 only and deliberately stay closed),
+#   - builds the container images (the server image compiles the React UI in
+#     a stage and bakes it in; the tunnel image bundles guacamole-lite),
+#   - applies migrations and identity setup inside containers: signing keys,
+#     the first (break-glass) admin, and the OIDC clients; on a re-run the
+#     break-glass admin gets a FRESH one-time temporary password,
+#   - builds the baremetal Go data-plane binary on the host (and runs the
+#     quality gates when HYPROXY_RUN_GATES=1),
+#   - renders dataplane/config.json (infra routes only; app routes are
+#     DB-driven and hot-loaded),
 #   - issues the Let's Encrypt wildcard cert via lego DNS-01 (no propagation
-#     wait: the self-check queries the domain's authoritative nameservers
-#     directly, so it passes as soon as the provider API writes the record),
-#   - installs and enables the systemd units (data plane + renewal timer),
-#   - brings up the control plane and starts the data plane.
+#     wait: lego is pointed at the domain's authoritative nameservers, so the
+#     self-check passes as soon as the provider API writes the record),
+#   - installs and enables the systemd units: the 'hyproxy' stack unit
+#     (control-plane containers + baremetal data plane via start.sh/stop.sh),
+#     the daily cert-renewal timer, and the audit-log-shipping timer,
+#   - enables BBR congestion control (WAN streaming throughput),
+#   - starts the control-plane containers, re-wraps stored secrets whenever a
+#     new master key was sealed, and starts the stack unit.
 #
-# A TPM 2.0 (/dev/tpmrm0) is REQUIRED: production installs always use the TPM
-# secrets backend; the on-disk 'file' backend is dev-only and never used here.
-# If a previous install used the file backend, its key is folded into the
-# sealed blob, all sealed data is re-wrapped to a fresh key, and the on-disk
-# key file is destroyed.
+# A TPM 2.0 (/dev/tpmrm0) is REQUIRED: the master key exists only sealed in
+# the TPM (and on the FIPS backup device it is copied to during the one-time
+# printout). There is no on-disk key and no alternative secrets backend.
 #
 # An existing sealed blob is kept only after it VERIFIABLY unseals to
 # master-key material under the PCR policy. On a fresh image the configured
 # handle may hold a foreign object from a different setup; that object is left
 # untouched and the new key is sealed to the next free persistent handle,
 # which is recorded in .env (HYPROXY_TPM_SEALED_BLOB). A sealed object that
-# no longer unseals (PCR drift) fails closed; see docs/TPM_STEPS.md, or set
+# no longer unseals (PCR drift) fails closed: restore the key from the FIPS
+# backup and reseal it under the current PCR values, or set
 # HYPROXY_TPM_FORCE_RESEAL=1 to discard it and seal a brand-new key.
 #
 # It deliberately does NOT do: WireGuard admin access, your public DNS records,
-# or the final security review. Those remain manual; see
-# docs/production-checklist.md.
+# or the final security review. Those remain manual; see the NEXT STEPS
+# printed at the end of the run.
 #
 # Overridable via environment:
 #   HYPROXY_REPO_URL, HYPROXY_REPO_BRANCH, HYPROXY_INSTALL_DIR, HYPROXY_RUN_GATES,
@@ -102,8 +119,14 @@ genpass() {
   else head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; fi
 }
 
+dnf_install() { c_info "dnf install: $*"; dnf install -y "$@"; }
+
+# The stack's compose file lives in the install dir; everything below the
+# clone step runs from there, but the explicit -f keeps it unambiguous.
+compose() { docker compose -f "$HYPROXY_INSTALL_DIR/docker-compose.yml" "$@"; }
+
 # --- 0. Preflight ------------------------------------------------------------
-c_info "hyproxy production installer"
+c_info "hyproxy installer"
 [ "$(id -u)" -eq 0 ] || c_die "run as root (needs dnf, firewalld, systemd, /opt, /etc/hyproxy)"
 
 ids="$(. /etc/os-release 2>/dev/null && printf '%s %s' "${ID:-}" "${ID_LIKE:-}")"
@@ -111,14 +134,15 @@ case " $ids " in
   *" rocky "*|*" rhel "*) : ;;
   *) c_die "unsupported OS '$ids'; this installer supports Rocky Linux only" ;;
 esac
-have git  || dnf install -y git
-have curl || dnf install -y curl
-have openssl || dnf install -y openssl
-have dig  || dnf install -y bind-utils  # cert script pins lego to the authoritative NS
+have git  || dnf_install git
+have curl || dnf_install curl
+have tar  || dnf_install tar
+have openssl || dnf_install openssl
+have dig  || dnf_install bind-utils  # cert script pins lego to the authoritative NS
 
 # TPM 2.0 is mandatory: the master key is sealed to hardware, never kept on disk.
-[ -e /dev/tpmrm0 ] || c_die "no TPM 2.0 resource manager at /dev/tpmrm0; production installs require a TPM"
-have tpm2_unseal || dnf install -y tpm2-tools
+[ -e /dev/tpmrm0 ] || c_die "no TPM 2.0 resource manager at /dev/tpmrm0; a TPM 2.0 is required"
+have tpm2_unseal || dnf_install tpm2-tools
 tpm2_pcrread sha256:0 >/dev/null 2>&1 || c_die "TPM present but tpm2_pcrread failed (check /dev/tpmrm0)"
 
 # --- 1. Gather configuration -------------------------------------------------
@@ -242,26 +266,12 @@ chown -R hyproxy:hyproxy "$HYPROXY_INSTALL_DIR"
 # --- 4. Master key: generate, seal into the TPM, print once -------------------
 # The master key lives ONLY inside the TPM (sealed under a PCR policy) and on
 # the FIPS backup device it is copied to when printed below. No plaintext on
-# disk, ever: the sealing scratch space is tmpfs and shredded, and the compose
-# master_key secret is pointed at /dev/null.
+# disk, ever: the sealing scratch space is tmpfs and shredded.
 umask 077
 : "${HYPROXY_TPM_SEALED_BLOB:=0x81010001}"
 : "${HYPROXY_TPM_PCRS:=sha256:0,2,4,7}"
 TSS_GID="$(getent group tss | cut -d: -f3)"
 [ -n "$TSS_GID" ] || c_die "host group 'tss' not found (tpm2-tools should have provided it)"
-
-# A previous file-backend install is migrated: its key lines are folded into
-# the sealed blob so existing ciphertext still decrypts, a fresh key is added
-# as current, and once the stack is up everything is re-wrapped to it and the
-# old key file destroyed (section 9).
-OLD_KEY_FILE=""
-case "${HYPROXY_MASTER_KEY_FILE:-}" in ""|/dev/null) ;; *)
-  [ -f "$HYPROXY_MASTER_KEY_FILE" ] && OLD_KEY_FILE="$HYPROXY_MASTER_KEY_FILE" ;;
-esac
-if [ -z "$OLD_KEY_FILE" ] && [ "${HYPROXY_SECRETS_BACKEND:-file}" != tpm ] \
-   && [ -f "$HYPROXY_INSTALL_DIR/server/.dev/master.keys" ]; then
-  OLD_KEY_FILE="$HYPROXY_INSTALL_DIR/server/.dev/master.keys"
-fi
 
 # An existing blob is trusted only after a full unseal round-trip: the handle
 # must unseal under the PCR policy AND yield master-key lines. tpm2_readpublic
@@ -300,8 +310,7 @@ find_free_handle() {  # first unoccupied persistent handle at/after the configur
 }
 
 NEW_KEY_SEALED=no
-if [ "$REUSE_ENV" = yes ] && [ "${HYPROXY_SECRETS_BACKEND:-}" = tpm ] && [ -z "$OLD_KEY_FILE" ] \
-   && blob_unseals "$HYPROXY_TPM_SEALED_BLOB"; then
+if [ "$REUSE_ENV" = yes ] && blob_unseals "$HYPROXY_TPM_SEALED_BLOB"; then
   c_info "master key already sealed in the TPM at $HYPROXY_TPM_SEALED_BLOB (unseal verified; keeping it)"
   # Record the kept key's fingerprint so .env pins the key the database is
   # already encrypted under (idempotent: same blob -> same fingerprint).
@@ -311,7 +320,7 @@ else
   # A new key is about to be sealed. If the configured handle is occupied by
   # an object that is not a usable hyproxy blob, never destroy it:
   #   - a keyedhash that no longer unseals may be an older hyproxy master key
-  #     whose PCR state drifted -> fail closed (docs/TPM_STEPS.md), unless
+  #     whose PCR state drifted -> fail closed, unless
   #     HYPROXY_TPM_FORCE_RESEAL=1 explicitly discards it;
   #   - anything else is a foreign object from a different setup -> leave it
   #     intact and seal to the next free handle instead (recorded in .env).
@@ -321,9 +330,10 @@ else
       tpm2_evictcontrol -C o -c "$HYPROXY_TPM_SEALED_BLOB" >/dev/null
     elif tpm2_readpublic -c "$HYPROXY_TPM_SEALED_BLOB" 2>/dev/null | grep -q keyedhash; then
       c_die "handle $HYPROXY_TPM_SEALED_BLOB holds a sealed object that does not unseal under pcr:$HYPROXY_TPM_PCRS.
-       If it is an earlier hyproxy master key, the PCR state has drifted: reseal it per
-       docs/TPM_STEPS.md. To discard it and seal a NEW key (any data sealed under it
-       becomes unrecoverable), re-run with HYPROXY_TPM_FORCE_RESEAL=1."
+       If it is an earlier hyproxy master key, the PCR state has drifted: restore the
+       key from the FIPS backup and reseal it under the current PCR values. To discard
+       it and seal a NEW key (any data sealed under it becomes unrecoverable), re-run
+       with HYPROXY_TPM_FORCE_RESEAL=1."
     else
       c_warn "handle $HYPROXY_TPM_SEALED_BLOB holds a foreign (non-hyproxy) object; leaving it untouched"
       HYPROXY_TPM_SEALED_BLOB="$(find_free_handle)" \
@@ -336,13 +346,6 @@ else
   PLAIN="$SEAL_DIR/master.keys"
   : > "$PLAIN"
   _n=1
-  if [ -n "$OLD_KEY_FILE" ]; then
-    c_info "folding existing file-backend key(s) from $OLD_KEY_FILE into the blob"
-    grep -v '^[[:space:]]*#' "$OLD_KEY_FILE" | grep . >> "$PLAIN" \
-      || c_die "no key lines found in $OLD_KEY_FILE"
-    _n=$(($(grep -c . "$PLAIN") + 1))
-    while grep -q "^mk-$_n:" "$PLAIN"; do _n=$((_n + 1)); done
-  fi
   # Random suffix makes the id globally unique: a fresh seal can never reuse an
   # earlier id (e.g. a second 'mk-1' with different bytes) and silently shadow
   # ciphertext still wrapped under the original. See core/secrets.py.
@@ -383,9 +386,6 @@ KEYOUT
 fi
 
 # --- 4b. Write config files ----------------------------------------------------
-# The compose master_key secret must still resolve to a file; /dev/null keeps
-# it defined and empty (the TPM backend never reads it).
-HYPROXY_MASTER_KEY_FILE=/dev/null
 if [ "$REUSE_ENV" = yes ]; then
   if [ "$ENV_SRC" = "$HYPROXY_INSTALL_DIR/.env" ]; then
     c_info "keeping the existing $HYPROXY_INSTALL_DIR/.env"
@@ -396,13 +396,13 @@ if [ "$REUSE_ENV" = yes ]; then
 else
 c_info "writing $HYPROXY_INSTALL_DIR/.env (the single config/secrets file)"
 cat > "$HYPROXY_INSTALL_DIR/.env" <<EOF
-# Generated by install.sh on $(date -u +%FT%TZ). Production values.
+# Generated by install.sh on $(date -u +%FT%TZ).
 HYPROXY_DOMAIN=$HYPROXY_DOMAIN
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 HYPROXY_ISSUER=$HYPROXY_ISSUER
 HYPROXY_ADMIN_UI_ORIGIN=$HYPROXY_ADMIN_UI_ORIGIN
 HYPROXY_APPS_UI_ORIGIN=$HYPROXY_APPS_UI_ORIGIN
-# Secrets backend lines (HYPROXY_SECRETS_BACKEND etc.) are appended below,
+# TPM master-key lines (HYPROXY_TPM_SEALED_BLOB etc.) are appended below,
 # outside this heredoc, so fresh and reused .env files get the same block.
 ADMIN_EMAIL=$ADMIN_EMAIL
 ADMIN_NAME=$ADMIN_NAME
@@ -422,17 +422,15 @@ EOF
 printf '%s' "$PROVIDER_CREDS" >> "$HYPROXY_INSTALL_DIR/.env"
 fi
 
-# Enforce the TPM backend in the .env whatever its origin (a reused pre-TPM
-# .env still says HYPROXY_SECRETS_BACKEND=file): replace the secrets-backend
-# lines with the canonical TPM block.
+# Rewrite the master-key block whatever the .env's origin: drop stale secrets
+# lines (including settings retired with the removed file backend) and append
+# the canonical TPM block.
 sed -i -e '/^HYPROXY_SECRETS_BACKEND=/d' -e '/^HYPROXY_MASTER_KEY_FILE=/d' \
        -e '/^HYPROXY_TPM_SEALED_BLOB=/d' -e '/^HYPROXY_TPM_PCRS=/d' \
        -e '/^HYPROXY_TPM_DEVICE=/d' -e '/^HYPROXY_MASTER_KEY_FP=/d' \
        -e '/^TSS_GID=/d' -e '/^COMPOSE_FILE=/d' "$HYPROXY_INSTALL_DIR/.env"
 [ -n "${MASTER_KEY_FP:-}" ] || c_die "internal: master key fingerprint not computed before writing .env"
 cat >> "$HYPROXY_INSTALL_DIR/.env" <<EOF
-HYPROXY_SECRETS_BACKEND=tpm
-HYPROXY_MASTER_KEY_FILE=/dev/null
 HYPROXY_TPM_SEALED_BLOB=$HYPROXY_TPM_SEALED_BLOB
 HYPROXY_TPM_PCRS=$HYPROXY_TPM_PCRS
 HYPROXY_TPM_DEVICE=/dev/tpmrm0
@@ -470,45 +468,190 @@ HYPROXY_LOG_DIR="$(sed -n 's/^HYPROXY_LOG_DIR=//p' "$HYPROXY_INSTALL_DIR/.env" |
 HYPROXY_LOG_DIR="${HYPROXY_LOG_DIR:-/var/log/hyproxy}"
 install -d -m 2775 -o 10001 -g hyproxy "$HYPROXY_LOG_DIR"
 
-# --- 5. Bootstrap (deps, firewall, images, migrate, admin, binary) -----------
-c_info "running bootstrap.sh"
-c_warn "SAVE the admin one-time password printed below; it is shown only once."
-SKIP_GATES=1; [ "${HYPROXY_RUN_GATES:-0}" = "1" ] && SKIP_GATES=0
-# Bootstrap output is teed through tmpfs (never disk) so the admin one-time
-# password can be re-printed in the final summary instead of scrolling away.
-BOOT_LOG="$(mktemp /dev/shm/hyproxy-boot.XXXXXX)"
-( set +e
-  HYPROXY_ASSUME_YES=1 SKIP_GATES="$SKIP_GATES" \
-    ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_NAME="$ADMIN_NAME" \
-    bash "$HYPROXY_INSTALL_DIR/bootstrap.sh" 2>&1
-  echo "$?" > "$BOOT_LOG.rc"
-) | tee "$BOOT_LOG"
-BOOT_RC="$(cat "$BOOT_LOG.rc" 2>/dev/null || echo 1)"
-ADMIN_TEMP_PW="$(sed -n 's/^temporary password (shown once): //p' "$BOOT_LOG" | tail -n 1)"
-rm -f "$BOOT_LOG" "$BOOT_LOG.rc"
-[ "$BOOT_RC" = 0 ] || c_die "bootstrap.sh failed (exit $BOOT_RC; see output above)"
+# The finished .env is the single source of truth from here on: every later
+# phase (compose substitution, the config render, cert issuance) reads the
+# same values the stack will run with.
+set -a
+# shellcheck disable=SC1091
+. "$HYPROXY_INSTALL_DIR/.env"
+set +a
+case "$HYPROXY_ISSUER" in https://*) : ;; *) c_die "HYPROXY_ISSUER must be an https:// URL" ;; esac
+[ "${POSTGRES_PASSWORD:-devonly}" = "devonly" ] && c_warn "POSTGRES_PASSWORD is still the compose placeholder; set a real one in .env before real use"
+case "${HYPROXY_ENABLE_GUAC:-no}" in [Yy]*|1|true) HYPROXY_ENABLE_GUAC=yes ;; *) HYPROXY_ENABLE_GUAC=no ;; esac
+export HYPROXY_TPM_DEVICE="${HYPROXY_TPM_DEVICE:-/dev/tpmrm0}"
+ADMIN_UI_REDIRECT="${ADMIN_UI_REDIRECT:-${HYPROXY_ADMIN_UI_ORIGIN%/}/callback}"
+# The admin-ui SPA is also served as the portal on the apps.* host; it logs in
+# with the same client_id=admin-ui but derives its redirect_uri from its own
+# origin, so that callback must be a registered redirect_uri too.
+APPS_UI_REDIRECT="${APPS_UI_REDIRECT:-${HYPROXY_APPS_UI_ORIGIN%/}/callback}"
 
-# From here on the service account drives docker compose. runuser does a fresh
-# initgroups, so the new membership applies immediately, no re-login needed.
-getent group docker >/dev/null 2>&1 || c_die "docker group not found after bootstrap"
+# --- 5. Host toolchain ---------------------------------------------------------
+# Everything here is idempotent: it checks first and only acts on what is
+# missing. Rocky Linux only, so dnf is used directly.
+c_info "host toolchain (installing anything missing)"
+
+if ! have docker; then
+  c_info "installing Docker CE (dnf, Docker upstream repo)"
+  dnf_install dnf-plugins-core
+  dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  dnf_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
+systemctl enable --now docker
+docker compose version >/dev/null 2>&1 || dnf_install docker-compose-plugin
+docker info >/dev/null 2>&1 || c_die "Docker installed but the daemon is unreachable (see 'systemctl status docker')"
+
+# The service account drives docker compose in the running stack. runuser does
+# a fresh initgroups, so the new membership applies immediately, no re-login.
+getent group docker >/dev/null 2>&1 || c_die "docker group not found after the Docker install"
 usermod -aG docker hyproxy
 
-# Optional guac cipher key, minted now that images exist.
-if [ "$HYPROXY_ENABLE_GUAC" = yes ]; then
-  c_info "minting a Guacamole cipher key"
-  GKEY="$(runuser -u hyproxy -- docker compose run --rm cli gen-guac-key 2>/dev/null | tr -d '\r' | tail -n1)"
-  if [ -n "$GKEY" ]; then printf 'HYPROXY_GUAC_CYPHER_KEY=%s\n' "$GKEY" >> "$HYPROXY_INSTALL_DIR/.env"
-  else c_warn "could not mint a guac key; set HYPROXY_GUAC_CYPHER_KEY in .env by hand"; fi
+have go   || dnf_install golang
+have make || dnf_install make
+
+if ! have uv; then
+  c_info "installing uv (astral standalone installer -> /usr/local/bin)"
+  curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
 fi
 
-# --- 6. Render the data-plane config -----------------------------------------
-# The data plane is the single LAN TLS ingress. idp and admin are proxied with
+if ! have lego; then
+  c_info "installing lego ACME client (latest GitHub release -> /usr/local/bin)"
+  case "$(uname -m)" in
+    x86_64)  _arch=amd64 ;;
+    aarch64) _arch=arm64 ;;
+    *) c_die "unsupported architecture $(uname -m) for the lego binary" ;;
+  esac
+  _ver="$(curl -fsSL https://api.github.com/repos/go-acme/lego/releases/latest \
+        | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  [ -n "$_ver" ] || c_die "could not determine the latest lego release"
+  _tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/go-acme/lego/releases/download/${_ver}/lego_${_ver}_linux_${_arch}.tar.gz" \
+    -o "$_tmp/lego.tar.gz"
+  tar -C "$_tmp" -xzf "$_tmp/lego.tar.gz" lego
+  install -m 0755 "$_tmp/lego" /usr/local/bin/lego
+  rm -rf "$_tmp"
+fi
+
+# --- 5b. Host firewall ---------------------------------------------------------
+# Open the public data-plane port so start.sh can serve without a separate
+# manual step; the ingress itself is not started until the end. The
+# control-plane ports (8300/8400/8500) are published on 127.0.0.1 only and are
+# deliberately NOT opened. The port is taken from DP_LISTEN, else
+# dataplane/config.json, else 443.
+c_info "host firewall (public data-plane port)"
+_listen="${DP_LISTEN:-}"
+if [ -z "$_listen" ] && [ -f "$HYPROXY_INSTALL_DIR/dataplane/config.json" ]; then
+  _listen="$(sed -nE 's/.*"listen"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$HYPROXY_INSTALL_DIR/dataplane/config.json" | head -n1)"
+fi
+_listen="${_listen:-:443}"
+_port="${_listen##*:}"
+case "$_port" in
+  ''|*[!0-9]*) c_warn "could not parse a public port from '$_listen'; skipping firewall" ;;
+  *)
+    if ! have firewall-cmd; then
+      c_warn "firewalld not present; ensure $_port/tcp is open in your firewall"
+    else
+      systemctl enable --now firewalld >/dev/null 2>&1 || true
+      if ! firewall-cmd --state >/dev/null 2>&1; then
+        c_warn "firewalld installed but not running; not opening $_port/tcp"
+      else
+        _open=1
+        firewall-cmd --query-port="$_port/tcp" >/dev/null 2>&1 || _open=0
+        if [ "$_open" -eq 0 ] && [ "$_port" = 443 ]; then
+          firewall-cmd --query-service=https >/dev/null 2>&1 && _open=1
+        fi
+        if [ "$_open" -eq 1 ]; then
+          c_info "firewall: $_port/tcp already open"
+        else
+          c_info "firewall: opening $_port/tcp (public data-plane ingress)"
+          firewall-cmd --permanent --add-port="$_port/tcp" >/dev/null
+          firewall-cmd --reload >/dev/null
+        fi
+      fi
+    fi
+    ;;
+esac
+
+# --- 6. Container images -------------------------------------------------------
+# The server image compiles the React UI in a stage and bakes it in; the tunnel
+# image bundles guacamole-lite. guacd and postgres are pulled.
+c_info "building container images (server + tunnel; UI compiled inside the server image)"
+compose --profile app --profile guac --profile tools build
+
+# --- 7. Database + identity setup (in containers) ------------------------------
+c_info "starting Postgres"
+compose up -d --wait postgres
+
+c_info "applying migrations"
+compose run --rm migrate
+
+c_info "ensuring signing keys exist (published in JWKS)"
+compose run --rm cli bootstrap-keys
+
+# The one-time temporary password in the output is captured so the final
+# summary can re-print it instead of letting it scroll away; it lives only in
+# this process's memory, never on disk.
+c_info "creating the first admin (or resetting its temporary password): $ADMIN_EMAIL"
+c_warn "SAVE the admin one-time password below; it is shown only once (and re-printed in the final summary)."
+_admin_out="$(compose run --rm cli bootstrap-admin --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" 2>&1)" \
+  || c_warn "bootstrap-admin reported an error; continuing"
+printf '%s\n' "$_admin_out"
+ADMIN_TEMP_PW="$(printf '%s\n' "$_admin_out" | sed -n 's/^temporary password (shown once): //p' | tail -n 1)"
+unset _admin_out
+
+c_info "registering the admin-ui OIDC public client"
+compose run --rm cli create-client \
+    --client-id admin-ui --name "Admin UI" \
+    --redirect-uri "$ADMIN_UI_REDIRECT" --redirect-uri "$APPS_UI_REDIRECT" \
+  || c_warn "admin-ui client already registered; continuing"
+
+c_info "registering the data plane forward-auth (gateway) OIDC client"
+compose run --rm cli bootstrap-gateway-client \
+  || c_die "failed to register the gateway client; protected resources will 400 at /oidc/authorize"
+
+echo
+echo "Register additional OIDC relying parties (extra apps) with:"
+echo "  docker compose run --rm cli create-client --client-id <id> --name <name> --redirect-uri <uri>"
+
+# --- 8. Baremetal data plane ---------------------------------------------------
+# The repo is owned by the hyproxy service account but the installer runs as
+# root, so git refuses to stamp VCS info ("dubious ownership") and `go build`
+# fails. Mark the tree safe for the building user; idempotent across reruns.
+git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$HYPROXY_INSTALL_DIR" \
+  || git config --global --add safe.directory "$HYPROXY_INSTALL_DIR"
+c_info "building the baremetal Go data plane binary"
+make -C "$HYPROXY_INSTALL_DIR" dp-build
+
+if [ "${HYPROXY_RUN_GATES:-0}" = 1 ]; then
+  c_info "running security and quality gates"
+  make -C "$HYPROXY_INSTALL_DIR" audit
+  make -C "$HYPROXY_INSTALL_DIR" dp-test
+else
+  c_warn "skipping make audit and make dp-test (set HYPROXY_RUN_GATES=1 to run them)"
+fi
+
+# --- 8b. Guacamole cipher key --------------------------------------------------
+# Minted now that the images exist; the tunnel container and the broker share
+# the key via compose.
+if [ "$HYPROXY_ENABLE_GUAC" = yes ]; then
+  if [ -n "${HYPROXY_GUAC_CYPHER_KEY:-}" ]; then
+    c_info "guac enabled: keeping the existing HYPROXY_GUAC_CYPHER_KEY from .env"
+  else
+    c_info "minting a Guacamole cipher key"
+    GKEY="$(runuser -u hyproxy -- docker compose run --rm cli gen-guac-key 2>/dev/null | tr -d '\r' | tail -n1)"
+    if [ -n "$GKEY" ]; then printf 'HYPROXY_GUAC_CYPHER_KEY=%s\n' "$GKEY" >> "$HYPROXY_INSTALL_DIR/.env"
+    else c_warn "could not mint a guac key; set HYPROXY_GUAC_CYPHER_KEY in .env by hand"; fi
+  fi
+else
+  c_info "guac disabled (enable later: docker compose run --rm cli gen-guac-key, then set HYPROXY_GUAC_CYPHER_KEY in .env)"
+fi
+
+# --- 9. Render the data-plane config -------------------------------------------
+# The data plane is the sole public TLS ingress. idp and admin are proxied with
 # auth disabled (they authenticate independently); application routes are
 # DB-driven and hot-loaded from the control plane, so only the infra routes are
 # rendered here. Static routes win on host conflict.
 c_info "rendering dataplane/config.json"
-set -a; . "$HYPROXY_INSTALL_DIR/.env"; set +a
-case "${HYPROXY_ENABLE_GUAC:-no}" in [Yy]*|1|true) HYPROXY_ENABLE_GUAC=yes ;; *) HYPROXY_ENABLE_GUAC=no ;; esac
 DP_OUT="${DP_OUT:-$HYPROXY_INSTALL_DIR/dataplane/config.json}"
 IDP_BACKEND="${IDP_BACKEND:-http://127.0.0.1:8300}"
 ADMIN_BACKEND="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
@@ -519,7 +662,6 @@ case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
   true|1|yes) UPSTREAM_INSECURE=true ;;
   *) UPSTREAM_INSECURE=false ;;
 esac
-HYPROXY_LOG_DIR="${HYPROXY_LOG_DIR:-/var/log/hyproxy}"
 HYPROXY_LOG_MAX_BYTES="${HYPROXY_LOG_MAX_BYTES:-52428800}"
 DP_LOG_LEVEL="${DP_LOG_LEVEL:-info}"
 cat > "$DP_OUT" <<EOF
@@ -547,11 +689,11 @@ cat > "$DP_OUT" <<EOF
 EOF
 echo "wrote $DP_OUT (ingress $DP_LISTEN, hosts: idp/admin/apps/auth.$HYPROXY_DOMAIN)"
 
-# bootstrap.sh and the render above ran as root; re-own so the service
-# account can read everything it runs (including the 0600 config.json).
+# The build and render above ran as root; re-own so the service account can
+# read everything it runs (including the 0600 config.json).
 chown -R hyproxy:hyproxy "$HYPROXY_INSTALL_DIR"
 
-# --- 7. TLS certificate (Let's Encrypt via DNS-01) ---------------------------
+# --- 10. TLS certificate (Let's Encrypt via DNS-01) ----------------------------
 # The issue/renew script is embedded here and written to /usr/local/sbin so the
 # daily systemd renewal timer has a stable path to execute, independent of the
 # repo checkout.
@@ -559,29 +701,6 @@ CERT_SCRIPT=/usr/local/sbin/hyproxy-obtain-cert.sh
 c_info "installing $CERT_SCRIPT"
 cat > "$CERT_SCRIPT" <<'OBTAIN_CERT'
 #!/usr/bin/env bash
-#
-# hyproxy-obtain-cert.sh: issue or renew the wildcard Let's Encrypt cert for the
-# domain via ACME DNS-01 (lego) and install it where the data plane hot-reloads
-# it (internal/tlsconf re-reads the files live, so no restart is needed).
-#
-# DNS-01 is used deliberately: it issues a browser-trusted cert for the LAN-only
-# admin/idp hosts WITHOUT exposing anything to the internet (the challenge is a
-# DNS TXT record). It also permits the wildcard.
-#
-# Usage:
-#   hyproxy-obtain-cert.sh            # issue if missing, else renew (<30d)
-#   hyproxy-obtain-cert.sh renew      # renew only
-#
-# Configuration comes from the environment (the hyproxy-acme systemd unit
-# loads the stack's .env via EnvironmentFile; ACME_ENV_FILE, if set, names an
-# env file to source instead):
-#   HYPROXY_DOMAIN          base domain; cert covers *.<domain> and <domain>
-#   ACME_EMAIL              registration/expiry-notice email
-#   LEGO_DNS_PROVIDER       lego DNS provider code (e.g. cloudflare, route53)
-#   <provider creds>        provider-specific env vars (e.g. CLOUDFLARE_DNS_API_TOKEN)
-#   LEGO_PATH               lego state dir (default /etc/hyproxy/lego)
-#   DP_TLS_CERT/DP_TLS_KEY  install targets (default /etc/hyproxy/certs/{fullchain,privkey}.pem)
-#   ACME_STAGING=1          use the Let's Encrypt STAGING CA first (untrusted, for dry runs)
 
 set -euo pipefail
 
@@ -599,31 +718,21 @@ LEGO_PATH="${LEGO_PATH:-/etc/hyproxy/lego}"
 DP_TLS_CERT="${DP_TLS_CERT:-/etc/hyproxy/certs/fullchain.pem}"
 DP_TLS_KEY="${DP_TLS_KEY:-/etc/hyproxy/certs/privkey.pem}"
 
-server_args=()
-[ "${ACME_STAGING:-0}" = "1" ] && server_args=(--server https://acme-staging-v02.api.letsencrypt.org/directory)
-
 common=(--accept-tos --email "$ACME_EMAIL" --dns "$LEGO_DNS_PROVIDER"
         --domains "*.$HYPROXY_DOMAIN" --domains "$HYPROXY_DOMAIN"
-        --path "$LEGO_PATH" "${server_args[@]}")
+        --path "$LEGO_PATH")
 
-# Pin lego's DNS self-check to the domain's authoritative nameservers: they
-# serve the TXT challenge record the instant the provider API writes it, so
-# the propagation check passes immediately instead of stalling on a LAN
-# resolver's cached NXDOMAIN for _acme-challenge.<domain> (the record is
-# gone again by the time anyone digs by hand: lego deletes it on cleanup).
-# --dns.resolvers is supported by every lego version, unlike the
-# propagation-skip flags. If the NS lookup fails, lego's defaults apply.
+# Point lego's propagation self-check at the domain's authoritative
+# nameservers so issuance proceeds as soon as the provider API writes the
+# TXT record, instead of waiting out public-resolver caches.
 for _ns in $(dig +short NS "$HYPROXY_DOMAIN" 2>/dev/null); do
   common+=(--dns.resolvers "${_ns%.}:53")
 done
 
 mode="${1:-auto}"
-# lego stores the wildcard cert under a sanitized name: *. -> _.
 crt="$LEGO_PATH/certificates/_.$HYPROXY_DOMAIN.crt"
 key="$LEGO_PATH/certificates/_.$HYPROXY_DOMAIN.key"
 
-# lego v5 folds get + renew into a single `run` command, and all these flags are
-# subcommand-scoped, so they must follow `run` (v4 accepted them before it).
 if { [ "$mode" = "auto" ] && [ ! -f "$crt" ]; }; then
   echo "==> issuing wildcard cert for *.$HYPROXY_DOMAIN via DNS-01 ($LEGO_DNS_PROVIDER)"
   lego run "${common[@]}"
@@ -634,9 +743,6 @@ fi
 
 [ -f "$crt" ] || { echo "expected issued cert at $crt not found" >&2; exit 1; }
 
-# Install atomically into the data-plane paths; hot-reload picks them up live.
-# DP_TLS_GROUP (optional): group granted read on the private key, so a
-# de-privileged data-plane service user can read it (0640 instead of 0600).
 install -d -m 0755 "$(dirname "$DP_TLS_CERT")"
 install -m 0644 "$crt" "$DP_TLS_CERT.tmp" && mv -f "$DP_TLS_CERT.tmp" "$DP_TLS_CERT"
 if [ -n "${DP_TLS_GROUP:-}" ]; then
@@ -649,11 +755,11 @@ echo "installed cert -> $DP_TLS_CERT, key -> $DP_TLS_KEY (data plane hot-reloads
 OBTAIN_CERT
 chmod 0755 "$CERT_SCRIPT"
 
-c_info "issuing the real Let's Encrypt wildcard cert (as the hyproxy user)"
+c_info "issuing the Let's Encrypt wildcard cert (as the hyproxy user)"
 runuser -u hyproxy -- env ACME_ENV_FILE="$HYPROXY_INSTALL_DIR/.env" "$CERT_SCRIPT" \
   || c_die "ACME issuance failed (see output above)"
 
-# --- 8. SELinux, systemd units ------------------------------------------------
+# --- 11. SELinux, systemd units ------------------------------------------------
 c_info "installing the systemd units"
 
 # The cert script needs no fcontext: /usr/local/sbin is bin_t by default.
@@ -664,9 +770,7 @@ if have getenforce && [ "$(getenforce)" != "Disabled" ]; then
   restorecon -v "$f"
 fi
 
-# Supervise the WHOLE stack through the repo launcher: start.sh brings up the
-# compose services and runs the baremetal data plane in the foreground, so this
-# one unit restarts everything on failure. Created only if missing.
+# Written only if absent, so operator edits to the unit survive re-runs.
 if [ ! -f /etc/systemd/system/hyproxy.service ]; then
 cat > /etc/systemd/system/hyproxy.service <<EOF
 [Unit]
@@ -692,8 +796,6 @@ WantedBy=multi-user.target
 EOF
 fi
 
-# Issue/renew the wildcard cert via DNS-01 and install it into the data-plane
-# cert paths. Oneshot, driven by hyproxy-acme.timer.
 cat > /etc/systemd/system/hyproxy-acme.service <<EOF
 [Unit]
 Description=hyproxy ACME wildcard cert issuance/renewal (lego DNS-01)
@@ -708,8 +810,6 @@ EnvironmentFile=$HYPROXY_INSTALL_DIR/.env
 ExecStart=$CERT_SCRIPT
 EOF
 
-# Daily cert-renewal check (lego renews only when <30 days remain, so a daily
-# run with jitter is safe and self-throttling).
 cat > /etc/systemd/system/hyproxy-acme.timer <<'EOF'
 [Unit]
 Description=Daily hyproxy Let's Encrypt renewal check
@@ -723,9 +823,6 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-# Drain new audit rows (auth events, access decisions, policy changes) from
-# the DB into the centralized audit.log. Oneshot, driven by
-# hyproxy-ship-logs.timer; the cursor makes reruns at-least-once, never lossy.
 cat > /etc/systemd/system/hyproxy-ship-logs.service <<EOF
 [Unit]
 Description=hyproxy audit log shipping to $HYPROXY_LOG_DIR/audit.log
@@ -763,28 +860,19 @@ systemctl enable hyproxy
 systemctl enable hyproxy-acme
 systemctl enable hyproxy-ship-logs
 
-# --- 8b. kernel network tuning (BBR congestion control) ----------------------
+# --- 11b. kernel network tuning (BBR congestion control) -----------------------
 c_info "enabling BBR congestion control (WAN streaming throughput)"
 
-# Cubic collapses its congestion window under last-mile packet loss on long-RTT
-# WAN paths, capping high-bitrate streams (e.g. Plex) to ~1 Mbps. BBR is model-
-# not loss-based and keeps the window open under moderate loss. The data plane is
-# the sender for downstream media, so this send-side change is the lever that
-# matters. See docs/QUALITY.md.
 cat > /etc/sysctl.d/99-hyproxy-net.conf <<'EOF'
 # hyproxy: WAN streaming throughput. BBR + fq (fair-queue pacing) so a single
-# high-bitrate flow is not throttled by cubic's loss-based backoff. See
-# docs/QUALITY.md.
+# high-bitrate flow is not throttled by cubic's loss-based backoff.
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 EOF
 
-# Load tcp_bbr now and on every boot so the sysctl above resolves.
 echo tcp_bbr > /etc/modules-load.d/hyproxy-bbr.conf
 if modprobe tcp_bbr 2>/dev/null; then
   sysctl --system >/dev/null
-  # default_qdisc only affects interfaces brought up later; set the live default
-  # interface too so BBR pacing is fully effective before the next reboot.
   iface=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
   [ -n "$iface" ] && tc qdisc replace dev "$iface" root fq 2>/dev/null || true
   cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
@@ -797,32 +885,20 @@ else
   c_warn "tcp_bbr module unavailable on this kernel; drop-in left in place for a kernel that has it"
 fi
 
-# --- 9. Start the stack ------------------------------------------------------
+# --- 12. Start the stack -------------------------------------------------------
 c_info "starting the control plane (containers, as the hyproxy user)"
 PROFILES="--profile app"
 [ "$HYPROXY_ENABLE_GUAC" = yes ] && PROFILES="$PROFILES --profile guac"
 # shellcheck disable=SC2086
 runuser -u hyproxy -- docker compose $PROFILES up -d --wait
 
-# Whenever a NEW master key became current (file->TPM migration, or any reseal),
-# re-wrap every sealed secret to it now that the stack is up. This also fails the
-# install closed if the database was encrypted under a key the new blob does not
-# contain: rotate-master-key decrypts each row first, so an orphaned reseal (old
-# key discarded/foreign, e.g. FORCE_RESEAL or a handle walk) surfaces here as a
-# hard error instead of a later runtime InvalidTag. On a fresh install every row
-# is already under the current key, so this is a no-op.
-if [ -n "$OLD_KEY_FILE" ] || [ "$NEW_KEY_SEALED" = yes ]; then
+if [ "$NEW_KEY_SEALED" = yes ]; then
   c_info "re-wrapping all sealed secrets to the current TPM master key"
   runuser -u hyproxy -- docker compose run --rm cli rotate-master-key \
     || c_die "re-wrap failed: the database holds ciphertext that the newly sealed
      master key cannot decrypt. The key it was encrypted under is not in this blob
      (an orphaned reseal). Restore the original key from the FIPS backup and reseal
-     under the current PCR policy (docs/TPM_STEPS.md) before retrying."
-fi
-if [ -n "$OLD_KEY_FILE" ]; then
-  # Invariant: no unsealed master-key material on disk in production.
-  c_info "destroying the on-disk file master key ($OLD_KEY_FILE)"
-  shred -u "$OLD_KEY_FILE"
+     under the current PCR policy before retrying."
 fi
 
 c_info "enabling + starting the stack, renewal timer, and log shipping timer"
@@ -830,7 +906,7 @@ systemctl enable --now hyproxy
 systemctl enable --now hyproxy-acme.timer
 systemctl enable --now hyproxy-ship-logs.timer
 
-# --- 10. Summary ---------------------------------------------------------------
+# --- 13. Summary ---------------------------------------------------------------
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 c_info "installation complete"
 cat <<EOF
@@ -853,11 +929,11 @@ NEXT STEPS (not automated):
 $(if [ -n "$ADMIN_TEMP_PW" ]; then
     printf '\n     ADMIN ONE-TIME PASSWORD for %s (shown once; save it NOW):\n         %s\n' "$ADMIN_EMAIL" "$ADMIN_TEMP_PW"
   else
-    printf '\n     (could not capture the one-time password from the bootstrap output;\n     look for the "temporary password (shown once)" line above. Every run\n     resets the break-glass admin to a fresh temporary password.)\n'
+    printf '\n     (could not capture the one-time password from the bootstrap-admin\n     output; look for the "temporary password (shown once)" line above. Every\n     run resets the break-glass admin to a fresh temporary password.)\n'
   fi)
-  3. Work through docs/production-checklist.md before internet exposure:
-     WireGuard admin access, backend TLS verification, off-box logging, and
-     the security review.
+  3. Before exposing the server to the internet: set up WireGuard admin
+     access, enforce backend TLS verification, wire off-box logging, and
+     complete a security review.
 
 SECURITY NOTES:
   - $HYPROXY_INSTALL_DIR/.env (0600, hyproxy-owned) holds ALL secrets: the Postgres
@@ -867,6 +943,6 @@ SECURITY NOTES:
   - The master key is sealed in the TPM (handle in HYPROXY_TPM_SEALED_BLOB)
     under PCR policy HYPROXY_TPM_PCRS; nothing unsealed is on disk. Keep the
     one-time printout on the FIPS device only. A firmware/kernel update that
-    changes the bound PCRs makes unsealing fail closed; reseal per
-    docs/TPM_STEPS.md before rebooting into such an update.
+    changes the bound PCRs makes unsealing fail closed; reseal
+    before rebooting into such an update.
 EOF

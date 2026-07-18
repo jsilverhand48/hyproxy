@@ -5,7 +5,7 @@ UV := cd $(SERVER) && uv run
 UI := ui
 TUNNEL := tunnel
 
-.PHONY: up down db-up db-down db-migrate db-revision gen-keys run-idp run-admin \
+.PHONY: up down db-up db-down db-migrate db-revision run-idp run-admin \
         bootstrap-admin create-client create-admin-ui-client rotate-key gc lint fmt typecheck \
         test test-integration test-e2e check audit ui-install ui-build ui-dev \
         gen-guac-key tunnel-install tunnel-run rotate-master-key ship-logs
@@ -41,9 +41,6 @@ db-revision:
 	$(UV) alembic revision --autogenerate -m "$(m)"
 
 ## --- Keys and bootstrap ---------------------------------------------------
-gen-keys:
-	$(UV) python -m hyproxy.cli gen-keys
-
 gen-certs:
 	$(UV) python scripts/gen_dev_certs.py
 
@@ -102,10 +99,10 @@ tunnel-install:
 tunnel-run:
 	cd $(TUNNEL) && npm start
 
-## --- Production hardening (Phase 5) -----------------------------------------
+## --- Production hardening -----------------------------------------
 # Re-wrap all sealed blobs to the current master key (e.g. after adding the
 # TPM-sealed key). Ship new audit rows off-box as JSON lines (cron it; pipe
-# stdout to your syslog/OTLP forwarder). See docs/production.md.
+# stdout to your syslog/OTLP forwarder).
 rotate-master-key:
 	$(UV) python -m hyproxy.cli rotate-master-key
 

@@ -1,15 +1,14 @@
 """Master-key access abstraction.
 
-Phase 1 ships a file-backed dev implementation. The Phase 5 TPM-backed secrets
-broker implements the same protocol; nothing else in the codebase changes.
+The master key is sealed in the TPM and unsealed into process memory at
+startup; there is no other backend. Any unseal failure raises and aborts
+startup (fail closed).
 """
 
 import base64
 import hashlib
-import secrets
 from collections.abc import Callable
 from functools import lru_cache
-from pathlib import Path
 from typing import Protocol
 
 from hyproxy.config import get_settings
@@ -76,26 +75,14 @@ class _MapBackend:
         return master_key_fingerprint(self._keys[self._current])
 
 
-class FileSecretsBackend(_MapBackend):
-    """Reads `key_id:base64key` lines; the last line is the current key.
-
-    Dev-only: the master key sits on disk (chmod 600). Production uses the
-    TPM-backed broker below.
-    """
-
-    def __init__(self, path: Path) -> None:
-        keys, current = parse_master_keys(path.read_text())
-        super().__init__(keys, current)
-
-
 class TpmSecretsBackend(_MapBackend):
     """Master keys unsealed from the TPM at process start into memory only.
 
-    The unsealed payload is the SAME `key_id:base64` format as the file backend,
-    but it is sealed to the TPM under a PCR policy and never touches disk in
-    cleartext. The TPM interaction is isolated behind the injected `unseal`
-    callable (returns the key text), so this adapter is testable without
-    hardware; production wires `unseal` to `tpm2_unseal` (see `tpm_unseal`).
+    The unsealed payload is `key_id:base64` lines (see `parse_master_keys`),
+    sealed to the TPM under a PCR policy; it never touches disk in cleartext.
+    The TPM interaction is isolated behind the injected `unseal` callable
+    (returns the key text), so this adapter is testable without hardware;
+    the running stack wires `unseal` to `tpm2_unseal` (see `tpm_unseal`).
     """
 
     def __init__(self, unseal: Callable[[], str]) -> None:
@@ -104,12 +91,12 @@ class TpmSecretsBackend(_MapBackend):
 
 
 def tpm_unseal() -> str:
-    """Unseal the master-key blob from the TPM (production only).
+    """Unseal the master-key blob from the TPM.
 
     Runs `tpm2_unseal` against the persistent handle in
     `HYPROXY_TPM_SEALED_BLOB`, re-satisfying the PCR policy the object was
     sealed under (`HYPROXY_TPM_PCRS`; MUST match the sealing-time selection).
-    Returns the same `key_id:base64` text the file backend parses. Fails
+    Returns the `key_id:base64` text `parse_master_keys` consumes. Fails
     closed: a missing handle, tool failure, or empty output raises so the
     process refuses to start rather than run without keys.
     """
@@ -144,33 +131,10 @@ def tpm_unseal() -> str:
     return out.stdout
 
 
-def generate_master_key_file(path: Path) -> str:
-    """Create (or append a new key to) the dev master key file. Returns the new key id.
-
-    The id carries a random suffix (`mk-<n>-<rand>`) so a freshly generated key
-    can never collide with an earlier one: a colliding id silently shadows old
-    ciphertext (same label, different bytes -> InvalidTag at decrypt), whereas a
-    unique id turns the same mistake into a clean "unknown master key id".
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing = path.read_text() if path.exists() else ""
-    n = sum(1 for line in existing.splitlines() if line.strip() and not line.startswith("#"))
-    key_id = f"mk-{n + 1}-{secrets.token_hex(4)}"
-    b64 = base64.b64encode(secrets.token_bytes(MASTER_KEY_BYTES)).decode()
-    with path.open("a") as f:
-        f.write(f"{key_id}:{b64}\n")
-    path.chmod(0o600)
-    return key_id
-
-
 @lru_cache
 def get_secrets_backend() -> SecretsBackend:
-    settings = get_settings()
-    if settings.secrets_backend == "tpm":
-        backend: SecretsBackend = TpmSecretsBackend(tpm_unseal)
-    else:
-        backend = FileSecretsBackend(Path(settings.master_key_file))
-    _verify_fingerprint(backend, settings.master_key_fp)
+    backend = TpmSecretsBackend(tpm_unseal)
+    _verify_fingerprint(backend, get_settings().master_key_fp)
     return backend
 
 
