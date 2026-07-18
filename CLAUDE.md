@@ -22,3 +22,7 @@ Do not:
 - rebuild after any changes using ./build.sh --clean
 - stop all processes using ./stop.sh
 - make changes on the remote host
+
+
+## Documentation
+Any time code is changed anywhere, make sure to update the documentation within the file containing the changed code as well as the README.md file for the respective directory.
