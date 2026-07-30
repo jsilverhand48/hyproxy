@@ -127,6 +127,13 @@ type Config struct {
 	// BotFilterCacheTTLSecs is how long a per-source-IP verdict (ASN/geo/PTR) is
 	// cached. Zero uses DefaultBotFilterCacheTTLSecs.
 	BotFilterCacheTTLSecs int `json:"botfilter_cache_ttl_secs,omitempty"`
+	// BotFilterAllowCidrs are extra source networks that bypass the bot filter
+	// entirely. Loopback, RFC1918, CGNAT, link-local, and this deployment's own
+	// public addresses (the A records of AuthHost and the Routes hosts,
+	// re-resolved periodically) are always exempt without configuration; this
+	// is for anything else that must never be dropped, e.g. an office range or
+	// a monitoring probe.
+	BotFilterAllowCidrs []string `json:"botfilter_allow_cidrs,omitempty"`
 }
 
 // DefaultRoutesRefreshSecs is the DB-route poll interval when unset.
@@ -239,8 +246,9 @@ func (c *Config) Validate() error {
 }
 
 // validateBotFilter checks the bot-filter config: user-agent patterns must
-// compile, country codes must be alpha-2, and a MaxMind database path is
-// required (and must exist) whenever its corresponding block list is used.
+// compile, country codes must be alpha-2, allow CIDRs must parse, and a MaxMind
+// database path is required (and must exist) whenever its corresponding block
+// list is used.
 func (c *Config) validateBotFilter() error {
 	for _, pat := range c.BlockedUserAgents {
 		if _, err := regexp.Compile(pat); err != nil {
@@ -264,6 +272,11 @@ func (c *Config) validateBotFilter() error {
 	if len(c.BlockedCountries) > 0 {
 		if err := statMMDB("geoip_country_db", c.GeoIPCountryDB); err != nil {
 			return err
+		}
+	}
+	for _, cidr := range c.BotFilterAllowCidrs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			return fmt.Errorf("botfilter_allow_cidrs: %w", err)
 		}
 	}
 	if c.BotFilterCacheTTLSecs == 0 {

@@ -101,7 +101,11 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		return nil, err
 	}
 	if bf != nil {
-		log.Info("bot filter enabled")
+		// self_ips are the resolved public addresses of our own hostnames; they
+		// bypass the filter so hairpinned LAN clients (which arrive from the
+		// WAN address) are never dropped. Empty means DNS did not answer at
+		// startup, so the exemption is only in place from the next refresh.
+		log.Info("bot filter enabled", "self_ips", strings.Join(bf.SelfIPs(), ","))
 	}
 	s := &Server{
 		authz:           checker,

@@ -8,6 +8,10 @@
 // heuristic: an IP whose ASN is a cloud provider, or that reverse-resolves to a
 // hosting domain, is almost never a real browser client. See BlockAnyResolvablePTR
 // for the caveat that many residential ISPs also assign PTR records.
+//
+// Every signal is preceded by the allowlist (allowlist.go), which exempts this
+// deployment's own public addresses and private sources; those are our users
+// arriving over hairpin NAT, never bots.
 package botfilter
 
 import (
@@ -16,6 +20,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"
@@ -66,6 +71,16 @@ type Filter struct {
 	countryDB mmdbReader // nil unless blockedCountries is non-empty
 	resolver  resolver
 
+	// Allowlist, checked before any signal (see allowlist.go). allowNets is
+	// fixed at startup; selfIPs holds the resolved addresses of selfHosts and
+	// is refreshed in the background.
+	allowNets  []*net.IPNet
+	selfHosts  []string
+	selfIPs    atomic.Pointer[[]net.IP]
+	ipResolver hostResolver
+	stopSelf   chan struct{}
+	selfDone   chan struct{}
+
 	cache *verdictCache
 }
 
@@ -80,7 +95,14 @@ func New(cfg *config.Config) (*Filter, error) {
 		blockedASNs:      make(map[uint]struct{}, len(cfg.BlockedASNs)),
 		blockedCountries: make(map[string]struct{}, len(cfg.BlockedCountries)),
 		resolver:         net.DefaultResolver,
+		ipResolver:       net.DefaultResolver,
+		selfHosts:        publicHosts(cfg),
 	}
+	allowNets, err := buildAllowNets(cfg.BotFilterAllowCidrs)
+	if err != nil {
+		return nil, err
+	}
+	f.allowNets = allowNets
 	for _, pat := range cfg.BlockedUserAgents {
 		re, err := regexp.Compile(pat)
 		if err != nil {
@@ -125,6 +147,7 @@ func New(cfg *config.Config) (*Filter, error) {
 		return nil, nil
 	}
 	f.cache = newVerdictCache(time.Duration(cfg.BotFilterCacheTTLSecs) * time.Second)
+	f.startSelfRefresh()
 	return f, nil
 }
 
@@ -138,10 +161,14 @@ func (f *Filter) ipChecksEnabled() bool {
 }
 
 // Decide reports whether a request from source IP ip with the given User-Agent
-// should be dropped, and a short reason for logging. The UA denylist is checked
-// first (cheap, per request); the IP-based signals are evaluated only on a UA
-// miss and cached per source IP.
+// should be dropped, and a short reason for logging. The allowlist wins over
+// every signal (our own public address and private sources are never bots).
+// Otherwise the UA denylist is checked first (cheap, per request) and the
+// IP-based signals only on a UA miss, cached per source IP.
 func (f *Filter) Decide(ip, userAgent string) (blocked bool, reason string) {
+	if f.allowed(ip) {
+		return false, ""
+	}
 	if f.blockEmptyUA && strings.TrimSpace(userAgent) == "" {
 		return true, "bad_user_agent"
 	}
@@ -217,11 +244,13 @@ func (f *Filter) ptrBlocked(ip net.IP) bool {
 	return false
 }
 
-// Close releases the MaxMind readers. Safe to call on a nil Filter.
+// Close stops the self-IP refresh and releases the MaxMind readers. Safe to
+// call on a nil Filter.
 func (f *Filter) Close() error {
 	if f == nil {
 		return nil
 	}
+	f.stopSelfRefresh()
 	var firstErr error
 	for _, r := range []mmdbReader{f.asnDB, f.countryDB} {
 		if r == nil {

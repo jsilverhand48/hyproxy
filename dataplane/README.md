@@ -37,7 +37,8 @@ streaming traffic off the container network path.
   cache (`authzcache.go`), and the tuned upstream transport
   (`transport.go`).
 - `internal/botfilter`: edge bot dropping (user agent, ASN, country, PTR)
-  with a per-IP verdict cache.
+  with a per-IP verdict cache, in front of an allowlist (`allowlist.go`) that
+  exempts private sources and our own public addresses.
 - `internal/accesslog`: the canonical per-request access log.
 - `internal/logrotate`: hand-rolled size-based rotating writer, so the binary
   keeps a near-zero dependency footprint (the only direct module dependency
@@ -46,8 +47,9 @@ streaming traffic off the container network path.
 ## Request path
 
 1. TLS handshake (SNI-independent single cert), HTTP/1.1.
-2. Bot filter (see below); a blocked request gets its connection closed with
-   no response body (`panic(http.ErrAbortHandler)`).
+2. Bot filter (see below); allowlisted sources pass untouched, a blocked
+   request gets its connection closed with no response body
+   (`panic(http.ErrAbortHandler)`).
 3. `NormalizeHost`; unknown host -> **421 Misdirected Request** (reveal
    nothing, route nowhere).
 4. Route kinds: the auth host (only `/gateway/*` and `/guac/token` are
@@ -95,8 +97,21 @@ success the WebSocket is reverse-proxied to `guac_backend` (the Node tunnel).
 
 ### Bot filter (`internal/botfilter`)
 
-Signal order, cheapest first: user agent regex denylist (and optionally empty
-UA) per request; then per-IP signals with a cached verdict
+**Allowlist first** (`allowlist.go`): a source address on the allowlist skips
+every signal. It always contains loopback, RFC1918, CGNAT (`100.64/10`),
+link-local, IPv6 ULA, and **this deployment's own public addresses** - the A/AAAA
+records of `auth_host` and the `routes` hosts, resolved at startup and
+re-resolved every 5 minutes so a dynamic WAN address stays current. That last
+part is not optional cosmetics: a client behind the proxy that leaves through
+the WAN and comes back by the public name (hairpin NAT) arrives with the
+domain's own public IP as its source, which has a residential PTR record, so
+without the exemption `block_any_resolvable_ptr` makes the site block its own
+users. A failed DNS pass keeps the previous addresses rather than emptying the
+list. `botfilter_allow_cidrs` adds anything else that must never be dropped
+(office range, monitoring probe).
+
+Signal order after that, cheapest first: user agent regex denylist (and
+optionally empty UA) per request; then per-IP signals with a cached verdict
 (`botfilter_cache_ttl_secs`, default 300): blocked ASNs (GeoLite2 ASN mmdb),
 blocked countries (GeoLite2 Country mmdb), and reverse-DNS PTR suffix
 matching (datacenter providers). PTR lookups fail **open** with a 2s timeout
@@ -146,6 +161,7 @@ rejection; validation errors abort startup.
 | `blocked_ptr_suffixes` | `[]` | Reverse-DNS suffixes to drop (e.g. cloud providers) |
 | `block_any_resolvable_ptr` | `false` | Drop any IP with any PTR record (aggressive) |
 | `botfilter_cache_ttl_secs` | `300` | Per-IP verdict cache TTL |
+| `botfilter_allow_cidrs` | `[]` | Extra never-blocked source networks. Loopback/private/CGNAT and our own resolved public IPs are always exempt without config |
 | `routes` | | Static infra routes: host -> `{backend, backend_port?, auth?, guac_tunnel?, guac_tunnel_path?, lan_only?}` |
 
 Note: `config.example.json` documents everything, including bot filter and

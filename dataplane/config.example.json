@@ -33,6 +33,7 @@
   "geoip_asn_db": "",
   "geoip_country_db": "",
   "botfilter_cache_ttl_secs": 300,
+  "botfilter_allow_cidrs": [],
   "routes": {
     "idp.localhost": {
       "backend": "http://127.0.0.1:8300",
