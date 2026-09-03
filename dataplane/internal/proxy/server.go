@@ -31,7 +31,12 @@ var identityHeaders = []string{"X-Forwarded-User", "X-Auth-User-Id", "X-Auth-Rol
 type AuthzChecker interface {
 	Check(ctx context.Context, req authz.CheckRequest) (authz.CheckResponse, error)
 	ConsumeGuac(ctx context.Context, req authz.ConsumeRequest) (bool, error)
+	ConsumeRtsp(ctx context.Context, req authz.ConsumeRequest) (bool, error)
 }
+
+// grantConsumer is the shared shape of ConsumeGuac / ConsumeRtsp: single-use,
+// IP-bound grant consumption tied to a live gateway session.
+type grantConsumer func(ctx context.Context, req authz.ConsumeRequest) (bool, error)
 
 // routeSet is one immutable routing snapshot: a lookup table and the reverse
 // proxies for its app routes, always built together so a Host lookup and its
@@ -68,6 +73,10 @@ type Server struct {
 	// guac_tunnel_path (the apps portal host). Nil when guac_backend is unset;
 	// config.Validate guarantees no route carries the flag in that case.
 	guacProxy *httputil.ReverseProxy
+	// rtspProxy serves the fixed /rtsp/stream path on routes flagged
+	// rtsp_tunnel_path (the apps portal host). Nil when rtsp_backend is unset;
+	// config.Validate guarantees no route carries the flag in that case.
+	rtspProxy *httputil.ReverseProxy
 	// LAN client allowlist for lan_only routes (config lan_cidrs, or the
 	// host's own interface subnets when unset) and where blocked browsers
 	// are redirected (the IdP login page).
@@ -127,6 +136,13 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 			return nil, err
 		}
 		s.guacProxy = newReverseProxy(u, log, transport)
+	}
+	if cfg.RtspBackend != "" {
+		u, err := url.Parse(cfg.RtspBackend)
+		if err != nil {
+			return nil, err
+		}
+		s.rtspProxy = newReverseProxy(u, log, transport)
 	}
 	// Initial snapshot: static infra routes only. The management plane
 	// (idp/admin) is reachable even if the control plane is down at boot; DB
@@ -366,7 +382,7 @@ func (s *Server) serveAuthHost(w http.ResponseWriter, r *http.Request) {
 	// Only the gateway and guac-broker surfaces are reachable on the auth host;
 	// /authz/check, /guac/consume, and everything else on the control plane
 	// stay internal.
-	if !strings.HasPrefix(r.URL.Path, "/gateway/") && !isPublicGuacPath(r.URL.Path) {
+	if !strings.HasPrefix(r.URL.Path, "/gateway/") && !isPublicBrokerPath(r.URL.Path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -374,10 +390,11 @@ func (s *Server) serveAuthHost(w http.ResponseWriter, r *http.Request) {
 	s.authProxy.ServeHTTP(w, r)
 }
 
-// isPublicGuacPath allows only the browser-facing guac broker path. /guac/consume
-// is an internal data-plane->authz call and must NOT be reachable from clients.
-func isPublicGuacPath(path string) bool {
-	return path == "/guac/token"
+// isPublicBrokerPath allows only the browser-facing token-mint paths on the auth
+// host. The matching /guac/consume and /rtsp/consume endpoints are internal
+// data-plane->authz calls and must NOT be reachable from clients.
+func isPublicBrokerPath(path string) bool {
+	return path == "/guac/token" || path == "/rtsp/token"
 }
 
 func (s *Server) serveApp(
@@ -411,6 +428,13 @@ func (s *Server) serveApp(
 	// else on the route proxies to the normal backend below.
 	if route.GuacTunnelPath && r.URL.Path == "/guac/tunnel" {
 		s.serveGuacTunnel(w, r, s.guacProxy, cookie)
+		return
+	}
+
+	// Same arrangement for RTSP camera streams: rtsp resources have no public
+	// host, so their fMP4-over-WebSocket bridge rides this fixed path.
+	if route.RtspTunnelPath && r.URL.Path == "/rtsp/stream" {
+		s.serveGrantedWS(w, r, s.rtspProxy, cookie, s.authz.ConsumeRtsp, "rtsp")
 		return
 	}
 
@@ -473,26 +497,35 @@ func (s *Server) serveApp(
 	}
 }
 
-// serveGuacTunnel authorizes and proxies a Guacamole tunnel WebSocket connect.
-// Authorization is a single-use grant consumption (bound to the browser IP and
-// a live gateway session), not the per-request policy check: the broker already
-// evaluated policy when it minted the token. ReverseProxy handles the WebSocket
-// upgrade to the Node guacamole-lite backend. Fails closed.
+// serveGuacTunnel authorizes and proxies a Guacamole tunnel WebSocket connect to
+// the Node guacamole-lite backend.
 func (s *Server) serveGuacTunnel(
 	w http.ResponseWriter, r *http.Request, upstream *httputil.ReverseProxy, cookie string,
+) {
+	s.serveGrantedWS(w, r, upstream, cookie, s.authz.ConsumeGuac, "guac")
+}
+
+// serveGrantedWS authorizes and proxies a WebSocket connect whose authorization
+// is a single-use grant consumption (bound to the browser IP and a live gateway
+// session) rather than the per-request policy check: the broker already
+// evaluated policy when it minted the token. ReverseProxy handles the WebSocket
+// upgrade. Fails closed.
+func (s *Server) serveGrantedWS(
+	w http.ResponseWriter, r *http.Request, upstream *httputil.ReverseProxy, cookie string,
+	consume grantConsumer, kind string,
 ) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		http.Error(w, "missing token", http.StatusUnauthorized)
 		return
 	}
-	allowed, err := s.authz.ConsumeGuac(r.Context(), authz.ConsumeRequest{
+	allowed, err := consume(r.Context(), authz.ConsumeRequest{
 		Token:         token,
 		SourceIP:      clientIP(r),
 		GatewayCookie: cookie,
 	})
 	if err != nil {
-		s.log.Error("guac consume unavailable", "err", err)
+		s.log.Error("grant consume unavailable", "kind", kind, "err", err)
 		http.Error(w, "authorization unavailable", http.StatusServiceUnavailable)
 		return
 	}

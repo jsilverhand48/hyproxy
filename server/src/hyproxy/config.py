@@ -120,6 +120,18 @@ class Settings(BaseSettings):
     guac_cypher_key: str = ""
     guac_grant_ttl: int = 60
 
+    # RTSP browser bridge. rtsp_cypher_key is base64 of the 32-byte
+    # AES-256-CBC key shared with the bridge service; the broker mints stream
+    # tokens under it and the bridge decrypts them. Empty disables RTSP
+    # entirely (the compose profile is skipped and the broker refuses).
+    # rtsp_grant_ttl bounds how long a minted stream token is valid;
+    # rtsp_max_stream_secs is a hard wall-clock cap on one ffmpeg session, and
+    # rtsp_max_streams_per_user caps concurrent transcodes per viewer.
+    rtsp_cypher_key: str = ""
+    rtsp_grant_ttl: int = 60
+    rtsp_max_stream_secs: int = 3600
+    rtsp_max_streams_per_user: int = 4
+
     # Centralized logging (see logs.py). log_dir empty = stderr only (dev);
     # production sets /var/log/hyproxy. Rotation keeps log_backup_count
     # archives (x.log.1, x.log.2) and deletes older ones.

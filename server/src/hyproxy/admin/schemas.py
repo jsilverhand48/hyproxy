@@ -83,7 +83,7 @@ def _normalize_public_host(v: object) -> object:
 
 
 class ResourceConnectionIn(BaseModel):
-    """Guacd connection details nested in ResourceCreate (protocol comes from
+    """Backend connection details nested in ResourceCreate (protocol comes from
     the resource itself)."""
 
     hostname: str = Field(min_length=1, max_length=255)
@@ -95,33 +95,40 @@ class ResourceConnectionIn(BaseModel):
 
 
 GUAC_PROTOCOLS = {"vnc", "rdp", "ssh"}
+# Protocols reached through a fixed path on the portal host instead of their own
+# public hostname, so they never appear in the data plane's route table.
+TUNNEL_PROTOCOLS = GUAC_PROTOCOLS | {"rtsp"}
 
 
 class ResourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    protocol: Literal["http", "https", "tcp", "vnc", "rdp", "ssh"]
+    protocol: Literal["http", "https", "tcp", "vnc", "rdp", "ssh", "rtsp"]
     public_host: str | None = None
     host: str = Field(min_length=1, max_length=255)
     ports: list[int] = Field(min_length=1)
     path_prefix: str | None = None
     description: str | None = None
     enabled: bool = True
-    # Required for vnc/rdp/ssh, forbidden otherwise.
+    # Required for vnc/rdp/ssh/rtsp, forbidden otherwise.
     connection: ResourceConnectionIn | None = None
 
     _norm_public_host = field_validator("public_host", mode="before")(_normalize_public_host)
 
     @model_validator(mode="after")
     def _check_protocol_shape(self) -> "ResourceCreate":
-        if self.protocol in GUAC_PROTOCOLS:
+        if self.protocol in TUNNEL_PROTOCOLS:
             if self.public_host is not None:
                 raise ValueError(
-                    "guac resources are reached via the portal tunnel and cannot have a public_host"
+                    "tunnelled resources are reached via the portal and cannot have a public_host"
                 )
             if self.connection is None:
-                raise ValueError("vnc/rdp/ssh resources require connection details")
+                raise ValueError("vnc/rdp/ssh/rtsp resources require connection details")
+            # RTSP credentials are supplied by the viewer per session, so there
+            # is nothing to seal and nothing that should ever be stored.
+            if self.protocol == "rtsp" and self.connection.secret_params:
+                raise ValueError("rtsp credentials are supplied per session and are not stored")
         elif self.connection is not None:
-            raise ValueError("connection is only valid for vnc/rdp/ssh resources")
+            raise ValueError("connection is only valid for vnc/rdp/ssh/rtsp resources")
         return self
 
 
@@ -183,13 +190,19 @@ class PolicyOut(BaseModel):
 
 
 class ResourceConnectionUpsert(BaseModel):
-    protocol: Literal["vnc", "rdp", "ssh"]
+    protocol: Literal["vnc", "rdp", "ssh", "rtsp"]
     hostname: str = Field(min_length=1, max_length=255)
     port: int = Field(ge=1, le=65535)
-    # Non-secret guacd parameters (all values are strings in the guac protocol).
+    # Non-secret backend parameters (guacd params, or "path"/"audio" for rtsp).
     params: dict[str, str] = Field(default_factory=dict)
     # Write-only: sealed at rest, never returned. Absent on PUT keeps existing.
     secret_params: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def _check_secrets(self) -> "ResourceConnectionUpsert":
+        if self.protocol == "rtsp" and self.secret_params:
+            raise ValueError("rtsp credentials are supplied per session and are not stored")
+        return self
 
 
 class ResourceConnectionOut(BaseModel):

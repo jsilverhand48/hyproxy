@@ -203,6 +203,18 @@ def gen_guac_key() -> None:
     click.echo(base64.b64encode(_secrets.token_bytes(32)).decode())
 
 
+@cli.command("gen-rtsp-key")
+def gen_rtsp_key() -> None:
+    """Generate a base64 32-byte AES-256-CBC key for the RTSP stream broker.
+
+    Set it as HYPROXY_RTSP_CYPHER_KEY. The broker and the rtspbridge service
+    read the same value from the environment, so one setting covers both."""
+    import base64
+    import secrets as _secrets
+
+    click.echo(base64.b64encode(_secrets.token_bytes(32)).decode())
+
+
 @cli.command("ship-logs")
 @click.option("--batch-size", default=500, show_default=True)
 @click.option(

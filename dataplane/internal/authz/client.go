@@ -80,9 +80,9 @@ func (c *Client) Check(ctx context.Context, req CheckRequest) (CheckResponse, er
 	return out, nil
 }
 
-// ConsumeRequest authorizes a Guacamole tunnel WebSocket connect: single-use,
-// IP-bound, and tied to a live gateway session (so IdP-session revocation tears
-// the tunnel down).
+// ConsumeRequest authorizes a grant-based WebSocket connect (the Guacamole
+// tunnel or the RTSP stream bridge): single-use, IP-bound, and tied to a live
+// gateway session (so IdP-session revocation tears the connection down).
 type ConsumeRequest struct {
 	Token         string `json:"token"`
 	SourceIP      string `json:"source_ip"`
@@ -98,12 +98,21 @@ type ConsumeResponse struct {
 // any transport error or non-2xx/3xx status returns allowed=false with err set
 // where relevant. A 403 is a clean deny (allowed=false, err=nil).
 func (c *Client) ConsumeGuac(ctx context.Context, req ConsumeRequest) (bool, error) {
+	return c.consume(ctx, "/guac/consume", req)
+}
+
+// ConsumeRtsp is the same contract for the RTSP stream bridge.
+func (c *Client) ConsumeRtsp(ctx context.Context, req ConsumeRequest) (bool, error) {
+	return c.consume(ctx, "/rtsp/consume", req)
+}
+
+func (c *Client) consume(ctx context.Context, path string, req ConsumeRequest) (bool, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return false, err
 	}
 	httpReq, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, c.base+"/guac/consume", bytes.NewReader(body),
+		ctx, http.MethodPost, c.base+path, bytes.NewReader(body),
 	)
 	if err != nil {
 		return false, err
@@ -125,7 +134,7 @@ func (c *Client) ConsumeGuac(ctx context.Context, req ConsumeRequest) (bool, err
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return false, nil
 	}
-	return false, fmt.Errorf("guac consume returned %d", resp.StatusCode)
+	return false, fmt.Errorf("%s returned %d", path, resp.StatusCode)
 }
 
 // routesResponse mirrors the control plane's GET /authz/routes envelope.

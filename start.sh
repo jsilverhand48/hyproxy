@@ -116,6 +116,12 @@ if [ -n "${HYPROXY_GUAC_CYPHER_KEY:-}" ]; then
 else
   log "guac disabled (HYPROXY_GUAC_CYPHER_KEY unset)"
 fi
+if [ -n "${HYPROXY_RTSP_CYPHER_KEY:-}" ]; then
+  log "rtsp enabled (HYPROXY_RTSP_CYPHER_KEY set): including the rtsp profile"
+  PROFILES+=(--profile rtsp)
+else
+  log "rtsp disabled (HYPROXY_RTSP_CYPHER_KEY unset)"
+fi
 
 log "starting Postgres"
 "${COMPOSE[@]}" up -d --wait postgres

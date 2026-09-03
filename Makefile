@@ -8,7 +8,7 @@ TUNNEL := tunnel
 .PHONY: up down db-up db-down db-migrate db-revision run-idp run-admin \
         bootstrap-admin create-client create-admin-ui-client rotate-key gc lint fmt typecheck \
         test test-integration test-e2e check audit ui-install ui-build ui-dev \
-        gen-guac-key tunnel-install tunnel-run rotate-master-key ship-logs
+        gen-guac-key gen-rtsp-key tunnel-install tunnel-run rotate-master-key ship-logs
 
 ## --- Dev database ---------------------------------------------------------
 # Preferred: Docker Compose. Fallback (no Docker): pgserver via scripts/devdb.py.
@@ -92,6 +92,11 @@ ui-dev:
 # is a separate native daemon (Apache Guacamole); point GUACD_HOST/PORT at it.
 gen-guac-key:
 	$(UV) python -m hyproxy.cli gen-guac-key
+
+# Set the printed value as HYPROXY_RTSP_CYPHER_KEY. The broker and the
+# rtspbridge service read the same variable, so one value covers both.
+gen-rtsp-key:
+	$(UV) python -m hyproxy.cli gen-rtsp-key
 
 tunnel-install:
 	cd $(TUNNEL) && npm install

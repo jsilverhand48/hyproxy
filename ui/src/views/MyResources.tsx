@@ -41,6 +41,20 @@ export function MyResources() {
                     >
                       Connect
                     </a>
+                  ) : r.protocol === "rtsp" ? (
+                    // Same arrangement for cameras: the watch view and its
+                    // stream WebSocket both live on the portal host.
+                    <a
+                      href={
+                        config.portalHost
+                          ? `https://${config.portalHost}/watch/${r.id}`
+                          : `/watch/${r.id}`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Watch
+                    </a>
                   ) : !r.public_host ? (
                     <span className="muted">(not routed)</span>
                   ) : (

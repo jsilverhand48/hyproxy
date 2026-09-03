@@ -12,6 +12,10 @@ routing host are emitted:
   - vnc/rdp/ssh -> never emitted; guac sessions ride the portal host's fixed
     /guac/tunnel path (data-plane `guac_tunnel_path` route flag), so guac
     resources carry no public_host
+  - rtsp -> never emitted, for the same reason: camera streams ride the portal
+    host's fixed /rtsp/stream path (data-plane `rtsp_tunnel_path` route flag).
+    The public_host IS NOT NULL filter below already excludes them, so this
+    needs no protocol test
   - tcp -> skipped (not an L7 backend today; awaits the raw-L4 listener seam)
 """
 

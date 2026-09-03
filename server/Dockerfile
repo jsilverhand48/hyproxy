@@ -40,8 +40,11 @@ WORKDIR /app/server
 # tpm2-tools backs the TPM secrets backend (core/secrets.py tpm_unseal shells
 # out to tpm2_unseal). The device itself is passed through by compose only in
 # TPM deployments (deploy/docker-compose.tpm.yml); harmless otherwise.
+# ffmpeg/ffprobe back the RTSP bridge (hyproxy.rtsp.app), which runs from this
+# same image as the rtspbridge service. It is one image for the whole control
+# plane, so idp/admin/authz carry the binaries without ever invoking them.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tpm2-tools \
+    && apt-get install -y --no-install-recommends tpm2-tools ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies first for layer caching. --no-dev drops the test/lint toolchain.

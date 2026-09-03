@@ -16,6 +16,7 @@ from hyproxy.authz.check import router as check_router
 from hyproxy.authz.gateway import router as gateway_router
 from hyproxy.authz.guac import router as guac_router
 from hyproxy.authz.routes import router as routes_router
+from hyproxy.authz.rtsp import router as rtsp_router
 from hyproxy.config import get_settings
 from hyproxy.logs import setup_logging
 
@@ -44,12 +45,13 @@ def create_app(idp_http: httpx.AsyncClient | None = None) -> FastAPI:
     app.include_router(routes_router)
     app.include_router(gateway_router)
     app.include_router(guac_router)
+    app.include_router(rtsp_router)
 
-    # The guac connect view runs on the SPA origins and must POST the
-    # cookie-authed /guac/token cross-origin (the data plane only exposes
-    # /gateway/* and /guac/token from this app to browsers, so this is
-    # effectively scoped to those). Credentials are required: the endpoint
-    # authenticates via the gateway session cookie.
+    # The guac connect and rtsp watch views run on the SPA origins and must
+    # POST the cookie-authed /guac/token and /rtsp/token cross-origin (the data
+    # plane only exposes /gateway/*, /guac/token and /rtsp/token from this app
+    # to browsers, so this is effectively scoped to those). Credentials are
+    # required: both endpoints authenticate via the gateway session cookie.
     settings = get_settings()
     spa_origins = [o for o in (settings.admin_ui_origin, settings.portal_origin) if o]
     if spa_origins:

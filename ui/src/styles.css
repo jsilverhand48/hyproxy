@@ -454,3 +454,36 @@ th {
   justify-content: center;
   cursor: none;
 }
+
+/* rtsp watch view (full-screen camera stream); same chrome as the connect
+   view, but the body is a <video> and the credential prompt that precedes it */
+.watch-view {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+.watch-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.4rem 0.8rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.watch-video {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.watch-login {
+  margin: auto;
+  padding: 1.5rem;
+  max-width: 22rem;
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}

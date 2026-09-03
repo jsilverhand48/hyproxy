@@ -7,14 +7,15 @@ from one codebase and one container image:
 |---|---|---|---|
 | IdP | `hyproxy.idp.app:app` | 8300 | Self-built OIDC identity provider + login/MFA web pages |
 | Admin | `hyproxy.admin.app:app` | 8400 | Management API, standard-user portal API, and the built React SPA |
-| Authz | `hyproxy.authz.app:app` | 8500 | Policy decision point, data plane gateway (OIDC RP), Guacamole broker endpoints |
+| Authz | `hyproxy.authz.app:app` | 8500 | Policy decision point, data plane gateway (OIDC RP), Guacamole and RTSP broker endpoints |
+| RTSP bridge | `hyproxy.rtsp.app:app` | 8700 | RTSP -> fragmented-MP4 WebSocket bridge (runs ffmpeg; `rtsp` compose profile) |
 
 Everything is async SQLAlchemy 2.0 over asyncpg/Postgres, Python >= 3.13.
 There are no console scripts in `pyproject.toml`: the services are uvicorn
 ASGI targets, the CLI is `python -m hyproxy.cli`, migrations are plain
 `alembic`. Package root: `src/hyproxy/`.
 
-Sections below: [Core](#core), [DB](#db), [Guac](#guac), [IdP](#idp),
+Sections below: [Core](#core), [DB](#db), [Guac](#guac), [RTSP](#rtsp), [IdP](#idp),
 [Security](#security), [Authz](#authz), [Admin](#admin), then scripts,
 packaging, and Docker notes. Environment variables are documented centrally
 in the [root README](../README.md#environment-env-parameters).
@@ -126,7 +127,7 @@ initialized accordingly.
 
 `alembic.ini` at the server root; `alembic/env.py` runs migrations through the
 async engine (`run_sync`), using the same `HYPROXY_DB_URL` as the app. Twelve
-linear revisions from the initial schema through guac connection rework. New
+linear revisions from the initial schema through the RTSP protocol addition. New
 revisions: `make db-revision m="message"` (autogenerate against
 `Base.metadata`), then `make db-migrate`.
 
@@ -137,10 +138,11 @@ revisions: `make db-revision m="message"` (autogenerate against
   derived from roles, `is_protected` marking the break-glass admin that
   cannot be deleted/disabled/demoted), `Role`, `UserRole`.
 - **Resources and policy:** `Resource` (protocol enum http/https/tcp/vnc/rdp/
-  ssh, unique CITEXT `public_host`, `ports` array), `Policy` (role x
+  ssh/rtsp, unique CITEXT `public_host`, `ports` array), `Policy` (role x
   resource allow/deny with optional port list, path prefixes, and
-  `conditions_json` time windows), `ResourceConnection` (guacd parameters;
-  secret parameters sealed, cleartext column holds secret **names** only).
+  `conditions_json` time windows), `ResourceConnection` (guacd parameters, or
+  hostname/port/`path` for rtsp; secret parameters sealed, cleartext column
+  holds secret **names** only - rtsp rows never carry one).
 - **Sessions and OAuth:** `Session` (hashed cookie secret, bound source IP,
   frozen `auth_tier`, `amr`, DPoP `jkt`, absolute expiry, step-up timestamp,
   `stale`/`revoked_at`), `OAuthClient` (public clients, DPoP required by
@@ -152,8 +154,8 @@ revisions: `make db-revision m="message"` (autogenerate against
   count, `break_glass` flag), `RecoveryCode` (argon2id hashes, batch id).
 - **Flows and gateway:** `LoginFlow` (stage machine + parked OIDC request +
   `completed_session_id`; completed rows are retained on purpose, see IdP),
-  `GatewaySession`, `GatewayLoginState`, `GuacGrant` (PK is the token hash,
-  IP-bound, single-use).
+  `GatewaySession`, `GatewayLoginState`, `GuacGrant` and `RtspGrant` (PK is
+  the token hash, IP-bound, single-use).
 - **Audit:** `AuthEvent`, `AuditLog` (every data plane decision),
   `PolicyChange`, `LogShipCursor` (shipping high-water marks),
   `AuthThrottle` (login rate limiting state).
@@ -193,7 +195,7 @@ makes grants single-use under concurrency without locks. The data plane calls
 requires a live gateway session, so revoking a user's session tears down
 tunnel access.
 
-### Token format (`guac/token.py`)
+### Token format (`core/sealedtoken.py`, re-exported by `guac/token.py`)
 
 Mirrors guacamole-lite's default codec: JSON -> PKCS7 -> **AES-256-CBC**
 (random IV) under the shared base64 32-byte `HYPROXY_GUAC_CYPHER_KEY` ->
@@ -201,12 +203,87 @@ Mirrors guacamole-lite's default codec: JSON -> PKCS7 -> **AES-256-CBC**
 separate from the AES-GCM master-key envelope used at rest. The key must be
 byte-identical to the tunnel's `GUAC_CYPHER_KEY`.
 
+The codec itself lives in `core/sealedtoken.py` because the RTSP broker uses the
+same envelope under its own key; `guac/token.py` re-exports it and owns the
+guacamole-lite wire-compatibility requirement.
+
 ### Confusion points
 
 - Connection secrets are write-only through the admin API: responses list
   secret **names**, never values.
 - `guac_disabled` (no cypher key configured) surfaces as 503 from
   `/guac/token`; a policy deny is 403. Different failure classes on purpose.
+
+---
+
+## RTSP
+
+`src/hyproxy/rtsp/` (broker, URL builder, bridge service) plus the
+browser-facing endpoints in `authz/rtsp.py`. Structurally a copy of the Guac
+path, with one deliberate difference that drives everything else: **nothing is
+stored**.
+
+### Two-stage authentication
+
+The viewer signs in with the IdP and is policy-checked like any other resource,
+then supplies the camera's own username and password. Those credentials are
+prompted per session, live only in browser memory and inside the encrypted
+stream token, and are never written to Postgres or to a log line. The admin API
+rejects `secret_params` on an rtsp connection for exactly this reason, so there
+is no sealed column to rotate and `core/reencrypt.py` needs no entry.
+
+### Model
+
+An rtsp `Resource` carries no `public_host` (streams ride a fixed
+`/rtsp/stream` path on the portal host, a data plane route flag) and one
+`ResourceConnection` holding `hostname`, `port`, and `params_json`:
+
+| Param | Meaning |
+|---|---|
+| `path` | Stream path, vendor-specific (`/Streaming/Channels/101`, `/cam/realmonitor?channel=1&subtype=0`) |
+| `audio` | `aac` opts into an audio transcode; anything else drops audio |
+
+### Mint (`rtsp/broker.py`)
+
+`issue_stream` loads the resource and its connection, calls `evaluate_access`,
+writes the `AuditLog` row **in the same transaction**, then builds the RTSP URL
+from the DB row plus the request's credentials, encrypts it into a token, and
+persists an `RtspGrant` holding only the token hash, the source IP, and the
+expiry. `rtsp/urls.py` percent-encodes the credentials with an empty safe set so
+a password containing `:`, `@` or `/` cannot break out of the userinfo component
+and rewrite the host. Host, port and path come only from the DB: the client
+supplies credentials and nothing else, preserving the SSRF invariant.
+
+### Consume
+
+The data plane calls `POST /rtsp/consume` when the stream WebSocket connects;
+the endpoint requires a live gateway session and atomically consumes the grant
+(single-use, IP-bound, unexpired).
+
+### Bridge (`rtsp/app.py`, port 8700)
+
+Its own process, so ffmpeg subprocesses and hour-long streams never contend with
+the latency-critical `/authz/check` path. It runs from the control-plane image
+(which carries ffmpeg) under the `rtsp` compose profile, exactly like `migrate`
+and `cli` reuse that image. Decrypting the token is its second gate: only the
+broker holds the key.
+
+It `ffprobe`s once, remuxes H.264 with `-c:v copy`, and re-encodes anything else
+(H.265, MJPEG) with libx264, because MSE will not play it. Output is fragmented
+MP4 on stdout. Wire protocol: **text** frames are JSON control
+(`{"type":"ready","codec":...}` / `{"type":"error","reason":...}`), **binary**
+frames are media.
+
+### Confusion points
+
+- `rtsp_disabled` (no cypher key configured) surfaces as 503 from
+  `/rtsp/token`; a policy deny is 403, matching the guac convention.
+- The probed codec string is sent to the browser because `addSourceBuffer`
+  throws if it does not describe the actual stream.
+- ffmpeg echoes the input URL (credentials included) in its errors, so its
+  stderr is only ever classified into a reason code, never logged or returned.
+- Transcoding costs real CPU per viewer; `HYPROXY_RTSP_MAX_STREAMS_PER_USER`
+  bounds it, per bridge process.
 
 ---
 

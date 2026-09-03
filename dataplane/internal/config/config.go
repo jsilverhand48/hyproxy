@@ -33,6 +33,11 @@ type Route struct {
 	// Set on the apps portal route only; guac resources carry no public host
 	// of their own.
 	GuacTunnelPath bool `json:"guac_tunnel_path,omitempty"`
+	// RtspTunnelPath serves the RTSP stream bridge WebSocket on this route's
+	// fixed /rtsp/stream path (everything else proxies to Backend as usual).
+	// Set on the apps portal route only; rtsp resources carry no public host
+	// of their own, exactly like guac ones.
+	RtspTunnelPath bool `json:"rtsp_tunnel_path,omitempty"`
 	// LanOnly restricts the route to clients whose TCP peer address is inside
 	// the LAN networks (Config.LanCidrs, or the host's own interface subnets
 	// when unset). Blocked browsers are redirected to Config.LanOnlyRedirect.
@@ -64,6 +69,9 @@ type Config struct {
 	// (vnc/rdp/ssh) to (the Node guacamole-lite service). DB guac routes carry no
 	// backend of their own; this supplies it. Empty disables DB guac routes.
 	GuacBackend string `json:"guac_backend"`
+	// RtspBackend is the origin the data plane routes RTSP stream connects to
+	// (the internal Python bridge that runs ffmpeg). Empty disables RTSP.
+	RtspBackend string `json:"rtsp_backend"`
 	// RoutesRefreshSecs is how often to poll the control plane for DB routes.
 	// Zero uses DefaultRoutesRefreshSecs.
 	RoutesRefreshSecs int `json:"routes_refresh_secs"`
@@ -199,6 +207,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("guac_backend: %w", err)
 		}
 	}
+	if c.RtspBackend != "" {
+		if _, err := parseBackend(c.RtspBackend); err != nil {
+			return fmt.Errorf("rtsp_backend: %w", err)
+		}
+	}
 	for _, cidr := range c.LanCidrs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("lan_cidrs: %w", err)
@@ -235,6 +248,9 @@ func (c *Config) Validate() error {
 		}
 		if route.GuacTunnelPath && c.GuacBackend == "" {
 			return fmt.Errorf("route %s: guac_tunnel_path requires guac_backend", host)
+		}
+		if route.RtspTunnelPath && c.RtspBackend == "" {
+			return fmt.Errorf("route %s: rtsp_tunnel_path requires rtsp_backend", host)
 		}
 		normalized[h] = route
 	}

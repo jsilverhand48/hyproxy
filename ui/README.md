@@ -43,16 +43,17 @@ handling). This keeps the bundle small and the CSP strict.
 - `src/App.tsx`: manual routing on `window.location.pathname`:
   - `/callback` finishes the OIDC login;
   - `/connect/<uuid>` is the full-screen Guacamole session view;
+  - `/watch/<uuid>` is the full-screen RTSP camera view;
   - everything else renders the sidebar layout with in-memory section state.
   Admin sections vs portal sections are selected here (see top).
 - `src/views/`: `Users`, `Roles`, `Resources`, `Policies`, `AccessAudit`,
   `AuthEvents`, `PolicyChanges` (admin); `MyResources`, `Downloads`,
-  `Account`, `Connect` (portal).
+  `Account`, `Connect`, `Watch` (portal).
 - `src/components/`: `ResourceDialog`, `ConfirmDialog`, `ErrorBoundary`,
   shared primitives in `ui.tsx`.
 - `src/lib/`: `config.ts` (all `VITE_*` runtime config), `auth.ts`,
-  `dpop.ts`, `pkce.ts`, `api.ts`, `guac.ts`, `useApi.ts`, `logger.ts`,
-  `types.ts`.
+  `dpop.ts`, `pkce.ts`, `api.ts`, `guac.ts`, `rtsp.ts`, `useApi.ts`,
+  `logger.ts`, `types.ts`.
 
 ### Remote desktop (`Connect.tsx` + `lib/guac.ts`)
 
@@ -64,6 +65,26 @@ this origin). It then opens
 the data plane consumes the grant and proxies the WebSocket to the tunnel
 service. A fresh token is minted on every (re)connect. A 401 on minting
 bounces the browser through `/gateway/start?rd=` to log in.
+
+### Camera streaming (`Watch.tsx` + `lib/rtsp.ts`)
+
+Same token-then-WebSocket shape as remote desktop, with a second credential
+prompt in front of it: the camera has its own username and password, which the
+view collects and posts to `<VITE_AUTH_ORIGIN>/rtsp/token`. They stay in
+component state (so a dropped stream can reconnect without re-prompting) and are
+never written to `localStorage` or anywhere else.
+
+It then opens `wss://<VITE_PORTAL_HOST>/rtsp/stream?token=...`. Text frames are
+JSON control messages; the `ready` frame carries the codec string used to build
+the `SourceBuffer`, and binary frames are fragmented MP4 appended to it. There
+is no player library: `MediaSource` and `<video>` are browser built-ins. Appends
+go through a queue drained on `updateend` (`appendBuffer` throws while an append
+is in flight), and the buffer is trimmed past ~60s so a long session does not
+grow without bound.
+
+This is why the admin app's CSP carries `media-src 'self' blob:` - the
+MediaSource object URL is a `blob:`, and `default-src 'none'` would otherwise
+block every `<video>` source.
 
 ### Error reporting (`lib/logger.ts`)
 
@@ -83,7 +104,7 @@ the SPA in its first stage).
 | `VITE_IDP_ISSUER` | dev IdP origin | IdP origin for authorize/token/logout/step-up |
 | `VITE_ADMIN_UI_CLIENT_ID` | `admin-ui` | Registered OIDC client id |
 | `VITE_PORTAL_HOST` | empty | Hostname on which the app renders portal-only sections |
-| `VITE_AUTH_ORIGIN` | empty | Origin that mints Guacamole tokens (`/guac/token`) |
+| `VITE_AUTH_ORIGIN` | empty | Origin that mints Guacamole and RTSP tokens (`/guac/token`, `/rtsp/token`) |
 
 The admin app must run with `HYPROXY_ADMIN_UI_ORIGIN` set to this app's
 origin: that is the sole IdP CORS allowance and the only permitted step-up

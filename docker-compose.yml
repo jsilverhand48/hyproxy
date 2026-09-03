@@ -71,6 +71,12 @@ x-server-env: &server-env
   # Guac tunnel-token key: the authz broker mints/validates guacamole-lite
   # tokens with it; empty disables the guac endpoints (guac_disabled).
   HYPROXY_GUAC_CYPHER_KEY: ${HYPROXY_GUAC_CYPHER_KEY:-}
+  # RTSP stream-token key: the authz broker mints tokens with it and the
+  # rtspbridge service decrypts them, so both read the same value. Empty
+  # disables the rtsp endpoints (rtsp_disabled).
+  HYPROXY_RTSP_CYPHER_KEY: ${HYPROXY_RTSP_CYPHER_KEY:-}
+  HYPROXY_RTSP_MAX_STREAM_SECS: ${HYPROXY_RTSP_MAX_STREAM_SECS:-3600}
+  HYPROXY_RTSP_MAX_STREAMS_PER_USER: ${HYPROXY_RTSP_MAX_STREAMS_PER_USER:-4}
   HYPROXY_EXTERNAL_SCHEME: ${HYPROXY_EXTERNAL_SCHEME:-https}
   HYPROXY_GATEWAY_COOKIE_DOMAIN: ${HYPROXY_GATEWAY_COOKIE_DOMAIN:-}
   HYPROXY_IDP_INTERNAL_URL: ${HYPROXY_IDP_INTERNAL_URL:-}
@@ -232,6 +238,35 @@ services:
     healthcheck:
       <<: *healthcheck-defaults
       test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8500),2).close()"]
+    restart: unless-stopped
+
+  # --- rtsp bridge (profile: rtsp) ------------------------------------------
+  # Runs from the control-plane image (which carries ffmpeg) with a different
+  # command, exactly like the migrate and cli services. Internal only: the Go
+  # data plane forward-auths and single-use-consumes the grant before proxying
+  # the /rtsp/stream WebSocket here. Deliberately NOT given the TPM device: it
+  # unseals nothing (rtsp stores no secret at all), so it has no business
+  # holding a handle to the master key.
+  rtspbridge:
+    profiles: [rtsp]
+    build: *server-build
+    image: hyproxy-server:local
+    command:
+      - uvicorn
+      - hyproxy.rtsp.app:app
+      - "--host=0.0.0.0"
+      - "--port=8700"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips=*"
+    environment: *server-env
+    volumes:
+      - ${HYPROXY_LOG_DIR:-./.dev/logs}:/var/log/hyproxy
+    ports:
+      - "127.0.0.1:8700:8700"
+    networks: [internal]
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8700),2).close()"]
     restart: unless-stopped
 
   # --- guac bridge (profile: guac) ------------------------------------------

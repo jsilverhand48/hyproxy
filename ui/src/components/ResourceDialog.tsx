@@ -3,8 +3,13 @@
 // - tcp: backend host/ports only (no route is emitted for tcp)
 // - vnc/rdp/ssh: the guacd target (hostname/port), username/password and extra
 //   guacd params; no public host, sessions ride the portal host's fixed
-//   /guac/tunnel path. Create sends one POST (resource + connection); edit
-//   PATCHes the resource then PUTs the connection.
+//   /guac/tunnel path.
+// - rtsp: the camera target (hostname/port) and its stream path; no public
+//   host, streams ride the portal host's fixed /rtsp/stream path. Deliberately
+//   NO credential fields: RTSP credentials are prompted per viewing session and
+//   are never stored, so there is nothing here to seal.
+// Create sends one POST (resource + connection); edit PATCHes the resource then
+// PUTs the connection.
 // Secrets are sealed server-side and never read back: leaving the password
 // blank keeps the existing value, "clear" sends an empty dict.
 
@@ -15,9 +20,17 @@ import { runMutation } from "../lib/useApi";
 import { Banner } from "./ui";
 import { Modal } from "./ConfirmDialog";
 
-const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh"];
+const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh", "rtsp"];
 const GUAC_PROTOCOLS = new Set(["vnc", "rdp", "ssh"]);
-const DEFAULT_GUAC_PORT: Record<string, string> = { vnc: "5900", rdp: "3389", ssh: "22" };
+// Protocols that carry a ResourceConnection and are reached through a fixed
+// path on the portal host instead of their own public hostname.
+const TUNNEL_PROTOCOLS = new Set([...GUAC_PROTOCOLS, "rtsp"]);
+const DEFAULT_TUNNEL_PORT: Record<string, string> = {
+  vnc: "5900",
+  rdp: "3389",
+  ssh: "22",
+  rtsp: "554",
+};
 
 function paramsToText(params: Record<string, string>): string {
   return Object.entries(params)
@@ -60,21 +73,25 @@ export function ResourceDialog({
   const [host, setHost] = useState(resource?.host ?? "");
   const [ports, setPorts] = useState(resource?.ports.join(", ") ?? "");
   const [description, setDescription] = useState(resource?.description ?? "");
-  const isGuac = GUAC_PROTOCOLS.has(protocol);
+  const isRtsp = protocol === "rtsp";
+  const isTunnel = TUNNEL_PROTOCOLS.has(protocol);
 
-  // Guac connection fields (vnc/rdp/ssh only). The username lives in guacd
-  // params; it gets its own input and is merged over the extra-params text.
+  // Connection fields (vnc/rdp/ssh/rtsp only). For guac the username lives in
+  // guacd params and gets its own input, merged over the extra-params text; for
+  // rtsp the stream path lives in params the same way.
   const [existingConn, setExistingConn] = useState<ResourceConnection | null>(null);
-  const [loadingConn, setLoadingConn] = useState(editing && GUAC_PROTOCOLS.has(protocol));
-  const [hostname, setHostname] = useState(editing && isGuac ? "" : resource?.host ?? "");
-  const [guacPort, setGuacPort] = useState(DEFAULT_GUAC_PORT[protocol] ?? "");
+  const [loadingConn, setLoadingConn] = useState(editing && TUNNEL_PROTOCOLS.has(protocol));
+  const [hostname, setHostname] = useState(editing && isTunnel ? "" : resource?.host ?? "");
+  const [connPort, setConnPort] = useState(DEFAULT_TUNNEL_PORT[protocol] ?? "");
   const [username, setUsername] = useState("");
+  const [streamPath, setStreamPath] = useState("");
+  const [transcodeAudio, setTranscodeAudio] = useState(false);
   const [paramsText, setParamsText] = useState("");
   const [secret, setSecret] = useState("");
   const [clearSecret, setClearSecret] = useState(false);
 
   useEffect(() => {
-    if (!editing || !GUAC_PROTOCOLS.has(resource.protocol)) return;
+    if (!editing || !TUNNEL_PROTOCOLS.has(resource.protocol)) return;
     let live = true;
     api
       .get<ResourceConnection>(`/resources/${resource.id}/connection`)
@@ -82,9 +99,11 @@ export function ResourceDialog({
         if (!live) return;
         setExistingConn(conn);
         setHostname(conn.hostname);
-        setGuacPort(String(conn.port));
-        const { username: user, ...rest } = conn.params;
+        setConnPort(String(conn.port));
+        const { username: user, path, audio, ...rest } = conn.params;
         setUsername(user ?? "");
+        setStreamPath(path ?? "");
+        setTranscodeAudio(audio === "aac");
         setParamsText(paramsToText(rest));
       })
       .catch((e: unknown) => {
@@ -92,7 +111,7 @@ export function ResourceDialog({
         // 404 = no connection yet; start from the resource's host/port.
         if (e instanceof ApiError && e.status === 404) {
           setHostname(resource.host);
-          setGuacPort(String(resource.ports[0] ?? DEFAULT_GUAC_PORT[resource.protocol] ?? ""));
+          setConnPort(String(resource.ports[0] ?? DEFAULT_TUNNEL_PORT[resource.protocol] ?? ""));
         } else {
           setMsg(e instanceof Error ? e.message : String(e));
         }
@@ -106,15 +125,27 @@ export function ResourceDialog({
   }, [editing, resource]);
 
   function changeProtocol(next: string) {
-    // Prefill the guac port unless the admin already typed a non-default one.
-    if (GUAC_PROTOCOLS.has(next) && (!guacPort || guacPort === DEFAULT_GUAC_PORT[protocol])) {
-      setGuacPort(DEFAULT_GUAC_PORT[next]);
+    // Prefill the port unless the admin already typed a non-default one.
+    if (TUNNEL_PROTOCOLS.has(next) && (!connPort || connPort === DEFAULT_TUNNEL_PORT[protocol])) {
+      setConnPort(DEFAULT_TUNNEL_PORT[next]);
     }
     setProtocol(next);
   }
 
-  function guacParams(): Record<string, string> {
+  function connParams(): Record<string, string> {
     const params = textToParams(paramsText);
+    if (isRtsp) {
+      // The stream path varies by vendor (/Streaming/Channels/101 on Hikvision,
+      // /cam/realmonitor?channel=1&subtype=0 on Dahua), so it is configured
+      // rather than guessed.
+      if (streamPath.trim()) params.path = streamPath.trim();
+      else delete params.path;
+      // Camera audio is usually G.711, which browsers cannot play, so it is
+      // dropped unless the admin asks for an AAC transcode.
+      if (transcodeAudio) params.audio = "aac";
+      else delete params.audio;
+      return params;
+    }
     if (username.trim()) params.username = username.trim();
     else delete params.username;
     return params;
@@ -124,16 +155,18 @@ export function ResourceDialog({
     const desc = description.trim() || null;
     if (!editing) {
       const body: Record<string, unknown> = { name: name.trim(), protocol, description: desc };
-      if (isGuac) {
+      if (isTunnel) {
         const connection: Record<string, unknown> = {
           hostname: hostname.trim(),
-          port: Number(guacPort),
-          params: guacParams(),
+          port: Number(connPort),
+          params: connParams(),
         };
-        if (secret) connection.secret_params = { password: secret };
-        // host/ports mirror the guacd target server-side; send them anyway to
-        // satisfy the schema.
-        Object.assign(body, { host: hostname.trim(), ports: [Number(guacPort)], connection });
+        // rtsp never sends secret_params: the server rejects stored credentials
+        // for it, because viewers authenticate to the camera per session.
+        if (secret && !isRtsp) connection.secret_params = { password: secret };
+        // host/ports mirror the connection target server-side; send them anyway
+        // to satisfy the schema.
+        Object.assign(body, { host: hostname.trim(), ports: [Number(connPort)], connection });
       } else {
         body.host = host.trim();
         body.ports = parsePorts(ports);
@@ -149,7 +182,7 @@ export function ResourceDialog({
     }
 
     const patch: Record<string, unknown> = { name: name.trim(), description: desc };
-    if (!isGuac) {
+    if (!isTunnel) {
       patch.host = host.trim();
       patch.ports = parsePorts(ports);
       if (protocol !== "tcp") patch.public_host = publicHost.trim() || null;
@@ -159,16 +192,18 @@ export function ResourceDialog({
       setMsg(patchErr);
       return;
     }
-    if (isGuac) {
+    if (isTunnel) {
       const body: Record<string, unknown> = {
         protocol,
         hostname: hostname.trim(),
-        port: Number(guacPort),
-        params: guacParams(),
+        port: Number(connPort),
+        params: connParams(),
       };
       // Absent -> keep existing secret; {} -> clear; value -> reseal.
-      if (clearSecret) body.secret_params = {};
-      else if (secret) body.secret_params = { password: secret };
+      if (!isRtsp) {
+        if (clearSecret) body.secret_params = {};
+        else if (secret) body.secret_params = { password: secret };
+      }
       const connErr = await runMutation(() =>
         api.put<ResourceConnection>(`/resources/${resource.id}/connection`, body),
       );
@@ -212,10 +247,10 @@ export function ResourceDialog({
             onChange={(e) => setName(e.target.value)}
             required
           />
-          {isGuac ? (
+          {isTunnel ? (
             <>
               <input
-                placeholder="hostname (reachable from guacd)"
+                placeholder={isRtsp ? "camera hostname or IP" : "hostname (reachable from guacd)"}
                 value={hostname}
                 onChange={(e) => setHostname(e.target.value)}
                 required
@@ -223,42 +258,75 @@ export function ResourceDialog({
               <input
                 placeholder="port"
                 inputMode="numeric"
-                value={guacPort}
-                onChange={(e) => setGuacPort(e.target.value)}
+                value={connPort}
+                onChange={(e) => setConnPort(e.target.value)}
                 required
               />
-              <input
-                placeholder="username (optional)"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="off"
-              />
-              <input
-                type="password"
-                placeholder={
-                  existingConn?.has_secret ? "password (set; blank keeps current)" : "password (optional)"
-                }
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                disabled={clearSecret}
-                autoComplete="new-password"
-              />
-              {existingConn?.has_secret && (
-                <label className="muted">
+              {isRtsp ? (
+                <>
                   <input
-                    type="checkbox"
-                    checked={clearSecret}
-                    onChange={(e) => setClearSecret(e.target.checked)}
-                  />{" "}
-                  clear stored secret ({existingConn.secret_keys.join(", ")})
-                </label>
+                    placeholder="stream path (e.g. /Streaming/Channels/101)"
+                    value={streamPath}
+                    onChange={(e) => setStreamPath(e.target.value)}
+                    required
+                  />
+                  <label className="muted">
+                    <input
+                      type="checkbox"
+                      checked={transcodeAudio}
+                      onChange={(e) => setTranscodeAudio(e.target.checked)}
+                    />{" "}
+                    include audio (transcoded to AAC)
+                  </label>
+                  <p className="muted">
+                    Viewers are prompted for the camera username and password each session;
+                    they are never stored here.
+                  </p>
+                  <textarea
+                    placeholder={"extra params, one per line (key=value)"}
+                    rows={3}
+                    value={paramsText}
+                    onChange={(e) => setParamsText(e.target.value)}
+                  />
+                </>
+              ) : (
+                <>
+                  <input
+                    placeholder="username (optional)"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    autoComplete="off"
+                  />
+                  <input
+                    type="password"
+                    placeholder={
+                      existingConn?.has_secret
+                        ? "password (set; blank keeps current)"
+                        : "password (optional)"
+                    }
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    disabled={clearSecret}
+                    autoComplete="new-password"
+                  />
+                  {existingConn?.has_secret && (
+                    <label className="muted">
+                      <input
+                        type="checkbox"
+                        checked={clearSecret}
+                        onChange={(e) => setClearSecret(e.target.checked)}
+                      />{" "}
+                      clear stored secret ({existingConn.secret_keys.join(", ")})
+                    </label>
+                  )}
+                  <textarea
+                    placeholder={"extra guacd params, one per line (key=value)\ne.g. ignore-cert=true"}
+                    rows={3}
+                    value={paramsText}
+                    onChange={(e) => setParamsText(e.target.value)}
+                  />
+                </>
               )}
-              <textarea
-                placeholder={"extra guacd params, one per line (key=value)\ne.g. ignore-cert=true"}
-                rows={3}
-                value={paramsText}
-                onChange={(e) => setParamsText(e.target.value)}
-              />
             </>
           ) : (
             <>

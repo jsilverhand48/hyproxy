@@ -42,9 +42,10 @@ portal, and an in-browser remote desktop bridge (Apache Guacamole).
    |               Postgres 17                        |
    +--------------------------------------------------+
                  |
-        optional guac profile (Docker)
-                 |
-   tunnel :8600 (guacamole-lite, Node)  ->  guacd :4822  ->  VNC/RDP/SSH targets
+        optional guac profile (Docker)          optional rtsp profile (Docker)
+                 |                                        |
+   tunnel :8600 (guacamole-lite, Node)      rtspbridge :8700 (ffmpeg, Python)
+        -> guacd :4822 -> VNC/RDP/SSH               -> RTSP cameras
 ```
 
 Request flows worth understanding before reading any code:
@@ -71,6 +72,15 @@ Request flows worth understanding before reading any code:
    consumes the grant via `/guac/consume` (IP-bound, live-session-bound) and
    reverse-proxies the WebSocket to the Node tunnel, which decrypts the token
    and speaks the Guacamole protocol to `guacd`.
+
+4. **Camera stream.** Same shape, with a second authentication stage. The
+   camera has its own username and password, which the SPA prompts for per
+   session and posts to `/rtsp/token`; they are never stored. The data plane
+   consumes the grant via `/rtsp/consume` and proxies
+   `wss://apps.example.com/rtsp/stream?token=...` to the RTSP bridge, which
+   decrypts the token and runs ffmpeg to remux the RTSP feed into fragmented
+   MP4. The browser plays it in a plain `<video>` through MediaSource: no
+   plugin, no extra public port, ~1-2s behind live.
 
 ## Repository layout
 
@@ -222,6 +232,7 @@ The management CLI (`python -m hyproxy.cli` inside the server env, or
 | `bootstrap-gateway-client` | | Register the data plane's gateway OIDC client |
 | `rotate-master-key` | | Re-encrypt all sealed blobs under the current master key |
 | `gen-guac-key` | | Print a fresh base64 32-byte Guacamole cypher key |
+| `gen-rtsp-key` | | Print a fresh base64 32-byte RTSP cypher key |
 | `ship-logs` | `--batch-size` (500), `--to-file` | Ship new audit rows to stdout or `audit.log` (see Logging) |
 | `gc` | | Purge expired DPoP jtis, login states, guac grants, login flows; retire old signing keys |
 
@@ -237,6 +248,7 @@ Run from the repo root. `uv` drives all Python invocations.
 | Run (dev) | `run-idp` (:8300 with dev TLS), `run-admin` (:8400), `run-authz` (:8500) |
 | Admin UI | `ui-install`, `ui-build`, `ui-dev` |
 | Guacamole | `gen-guac-key`, `tunnel-install`, `tunnel-run` |
+| RTSP | `gen-rtsp-key` |
 | Prod hardening | `rotate-master-key`, `ship-logs args="..."` |
 | Data plane | `dp-build`, `dp-test` (gofmt + vet + tests), `dp-fuzz` (host normalizer, 30s), `dp-run` |
 | Quality | `lint`, `fmt`, `typecheck`, `test`, `test-integration`, `test-e2e`, `check`, `audit` (bandit + pip-audit) |
@@ -283,11 +295,16 @@ defaults.
 | `authz` | `app` | `uvicorn hyproxy.authz.app:app --port 8500 --workers 2` | 8500 |
 | `guacd` | `guac` | `guacamole/guacd:1.5.5` | internal only |
 | `tunnel` | `guac` | built from `tunnel/` | 8600 |
+| `rtspbridge` | `rtsp` | server image, `uvicorn hyproxy.rtsp.app:app --port 8700` | 8700 |
 
 Notes:
 
-- The `guac` profile is only started when `HYPROXY_GUAC_CYPHER_KEY` is set
-  (the scripts add `--profile guac` conditionally).
+- The `guac` profile is only started when `HYPROXY_GUAC_CYPHER_KEY` is set,
+  and the `rtsp` profile only when `HYPROXY_RTSP_CYPHER_KEY` is set (the
+  scripts add `--profile guac` / `--profile rtsp` conditionally).
+- `rtspbridge` runs from the control-plane image with a different command, the
+  way `migrate` and `cli` do. That image carries `ffmpeg` for it; the other
+  services never invoke it.
 - authz runs 2 uvicorn workers because `/authz/check` gates every proxied
   request; a single event loop queues concurrent media-segment checks.
 - `HYPROXY_LOG_DIR` (when set) bind-mounts into every service at
@@ -352,6 +369,10 @@ Optional, with defaults (all read by the control plane unless noted):
 | `HYPROXY_MASTER_KEY_FP` | empty | Pinned fingerprint of the master key; startup fails closed on mismatch. Empty skips the check |
 | `HYPROXY_GUAC_CYPHER_KEY` | empty | Base64 32-byte Guacamole token key; empty disables guac entirely |
 | `HYPROXY_GUAC_GRANT_TTL` | `60` | Seconds a minted tunnel token stays valid (single-use regardless) |
+| `HYPROXY_RTSP_CYPHER_KEY` | empty | Base64 32-byte RTSP stream-token key; empty disables rtsp entirely |
+| `HYPROXY_RTSP_GRANT_TTL` | `60` | Seconds a minted stream token stays valid (single-use regardless) |
+| `HYPROXY_RTSP_MAX_STREAM_SECS` | `3600` | Hard wall-clock cap on one ffmpeg session |
+| `HYPROXY_RTSP_MAX_STREAMS_PER_USER` | `4` | Concurrent streams per viewer, per bridge process |
 | `HYPROXY_AUTH_HOST` | `auth.<domain>` | Public hostname for the gateway endpoints |
 | `HYPROXY_EXTERNAL_SCHEME` | `https` | Scheme used in gateway redirects |
 | `HYPROXY_GATEWAY_COOKIE_NAME` | `__Secure-gw` | Gateway session cookie name |
@@ -387,7 +408,7 @@ Optional, with defaults (all read by the control plane unless noted):
 | `HYPROXY_LOG_BACKUP_COUNT` | `2` | Archives kept per log file |
 | `VITE_ADMIN_UI_CLIENT_ID` | `admin-ui` | SPA build arg: OIDC client id |
 | `VITE_PORTAL_HOST` | empty | SPA build arg: portal hostname (switches the SPA to portal-only sections on that host) |
-| `VITE_AUTH_ORIGIN` | derived | SPA build arg: origin that mints guac tokens |
+| `VITE_AUTH_ORIGIN` | derived | SPA build arg: origin that mints guac and rtsp tokens |
 | `DP_LISTEN` | `:443` | Data plane listen address (start.sh) |
 | `DP_LOG_LEVEL` | `info` | Data plane log level, rendered into config.json |
 | `DP_TLS_CERT` / `DP_TLS_KEY` | `/etc/hyproxy/certs/...` | Cert/key paths rendered into config.json |

@@ -113,14 +113,21 @@ if [ -n "${HYPROXY_GUAC_CYPHER_KEY:-}" ]; then
 else
   log "guac disabled (HYPROXY_GUAC_CYPHER_KEY unset)"
 fi
+if [ -n "${HYPROXY_RTSP_CYPHER_KEY:-}" ]; then
+  PROFILES+=(--profile rtsp)
+  log "rtsp enabled (HYPROXY_RTSP_CYPHER_KEY set): including the rtsp profile"
+else
+  log "rtsp disabled (HYPROXY_RTSP_CYPHER_KEY unset)"
+fi
 
 # --- 1. Data-plane config (rendered artifact the data plane consumes) ---------
 # Inline mirror of the canonical template embedded in install.sh; keep the two
 # in sync. idp and admin are proxied with auth disabled (they
-# authenticate independently); apps additionally serves the Guacamole WS
-# tunnel on its fixed /guac/tunnel path (guac_tunnel_path). Application routes
-# are DB-driven and hot-loaded from the control plane, so only the infra
-# routes are rendered here. Static routes win on host conflict.
+# authenticate independently); apps additionally serves the Guacamole WS tunnel
+# on its fixed /guac/tunnel path (guac_tunnel_path) and the RTSP stream bridge
+# WS on /rtsp/stream (rtsp_tunnel_path). Application routes are DB-driven and
+# hot-loaded from the control plane, so only the infra routes are rendered
+# here. Static routes win on host conflict.
 render_dp_config() {
   [ -n "${HYPROXY_DOMAIN:-}" ] || die "HYPROXY_DOMAIN must be set in .env to render dataplane/config.json"
   local dp_listen="${DP_LISTEN:-:443}"
@@ -130,6 +137,7 @@ render_dp_config() {
   local admin_backend="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
   local authz_backend="${AUTHZ_BACKEND:-http://127.0.0.1:8500}"
   local guac_backend="${GUAC_BACKEND:-http://127.0.0.1:8600}"
+  local rtsp_backend="${RTSP_BACKEND:-http://127.0.0.1:8700}"
   local routes_refresh="${ROUTES_REFRESH_SECS:-10}"
   local upstream_insecure
   case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
@@ -149,6 +157,7 @@ render_dp_config() {
   "auth_backend": "$authz_backend",
   "gateway_cookie_name": "__Secure-gw",
   "guac_backend": "$guac_backend",
+  "rtsp_backend": "$rtsp_backend",
   "routes_refresh_secs": $routes_refresh,
   "upstream_insecure_skip_verify": $upstream_insecure,
   "log_dir": "$log_dir",
@@ -158,7 +167,7 @@ render_dp_config() {
   "routes": {
     "idp.$HYPROXY_DOMAIN": { "backend": "$idp_backend", "auth": false },
     "admin.$HYPROXY_DOMAIN": { "backend": "$admin_backend", "auth": false },
-    "apps.$HYPROXY_DOMAIN": { "backend": "$admin_backend", "auth": false, "guac_tunnel_path": true }
+    "apps.$HYPROXY_DOMAIN": { "backend": "$admin_backend", "auth": false, "guac_tunnel_path": true, "rtsp_tunnel_path": true }
   }
 }
 EOF

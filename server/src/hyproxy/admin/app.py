@@ -28,11 +28,12 @@ def _idp_origin() -> str:
 
 def _csp() -> str:
     # The SPA fetches its own /api (self), the IdP token endpoint (connect to
-    # the IdP origin), the auth host's /guac/token (cookie-authed mint for the
-    # guac connect view), and the wss:// guac tunnel hosts under the cookie
-    # domain. Scripts/styles are self-hosted, hashed assets: no inline,
-    # no eval. Navigations to the IdP (authorize / step-up) are top-level, not
-    # governed by connect-src.
+    # the IdP origin), the auth host's /guac/token and /rtsp/token (cookie-authed
+    # mints for the connect and watch views), and the wss:// tunnel hosts under
+    # the cookie domain (both the guac tunnel and the rtsp stream bridge).
+    # Scripts/styles are self-hosted, hashed assets: no inline, no eval.
+    # Navigations to the IdP (authorize / step-up) are top-level, not governed
+    # by connect-src.
     settings = get_settings()
     connect = "'self'"
     origin = _idp_origin()
@@ -43,8 +44,9 @@ def _csp() -> str:
         d = settings.gateway_cookie_domain.lstrip(".")
         connect += f" wss://*.{d}"
     if settings.portal_origin:
-        # The guac tunnel WS lives on the portal host (/guac/tunnel); cover it
-        # explicitly for deployments without a gateway cookie domain.
+        # The guac tunnel and rtsp stream WebSockets live on the portal host
+        # (/guac/tunnel, /rtsp/stream); cover it explicitly for deployments
+        # without a gateway cookie domain.
         portal_host = urlsplit(settings.portal_origin).netloc
         if portal_host:
             connect += f" wss://{portal_host}"
@@ -53,6 +55,11 @@ def _csp() -> str:
         "script-src 'self'; "
         "style-src 'self'; "
         "img-src 'self' data:; "
+        # The RTSP watch view plays fragmented MP4 through a MediaSource, whose
+        # object URL is a blob:. Without this, default-src 'none' blocks every
+        # <video> source. No worker-src is needed: ffmpeg emits fMP4 directly,
+        # so the browser never runs a demuxer.
+        "media-src 'self' blob:; "
         f"connect-src {connect}; "
         "form-action 'self'; "
         "frame-ancestors 'none'; "

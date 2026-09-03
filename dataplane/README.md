@@ -32,7 +32,8 @@ streaming traffic off the container network path.
   the old cert. TLS 1.2 floor. This is where ACME integration would slot in;
   today certs are managed externally (lego + systemd timer).
 - `internal/authz`: forward-auth client (`/authz/check`, `/guac/consume`,
-  `/authz/routes`), 5s timeout, tuned idle connection pool, fails closed.
+  `/rtsp/consume`, `/authz/routes`), 5s timeout, tuned idle connection pool,
+  fails closed.
 - `internal/proxy`: the request handler (`server.go`), the allow-decision
   cache (`authzcache.go`), and the tuned upstream transport
   (`transport.go`).
@@ -52,10 +53,11 @@ streaming traffic off the container network path.
    (`panic(http.ErrAbortHandler)`).
 3. `NormalizeHost`; unknown host -> **421 Misdirected Request** (reveal
    nothing, route nowhere).
-4. Route kinds: the auth host (only `/gateway/*` and `/guac/token` are
-   proxied to the control plane; everything else, including `/authz/check`
-   and `/guac/consume`, is 404 to clients), guac tunnel routes (see below),
-   `lan_only` routes, and ordinary app routes.
+4. Route kinds: the auth host (only `/gateway/*`, `/guac/token` and
+   `/rtsp/token` are proxied to the control plane; everything else, including
+   `/authz/check`, `/guac/consume` and `/rtsp/consume`, is 404 to clients),
+   grant-authorized tunnel routes (see below), `lan_only` routes, and ordinary
+   app routes.
 5. For auth-gated routes: extract the gateway cookie, POST `/authz/check`
    with `{host, method, uri, source_ip, backend_port, gateway_cookie}`.
    - `allow`: strip inbound `X-Forwarded-User`, `X-Auth-User-Id`,
@@ -87,13 +89,23 @@ hot-swaps its route table, so an admin adding a resource makes the route live
 with no restart. Static routes win on host conflict; a failed poll keeps the
 last-good table; one bad row is skipped and logged, never fatal.
 
-### Guacamole tunnel
+### Grant-authorized WebSockets
 
-Routes flagged `guac_tunnel` (or the `guac_tunnel_path` flag, which carves
-`/guac/tunnel` out of a normal host such as the portal) require a `?token=`
-query parameter and call `POST /guac/consume` instead of `/authz/check`. The
-grant is single-use, IP-bound, and requires a live gateway session; on
-success the WebSocket is reverse-proxied to `guac_backend` (the Node tunnel).
+Two route flags carve a fixed WebSocket path out of a normal host (the portal)
+and authorize it by single-use grant consumption instead of the per-request
+`/authz/check`. Both require a `?token=` query parameter; both grants are
+single-use, IP-bound, and require a live gateway session. `serveGrantedWS` in
+`internal/proxy/server.go` implements the shared contract and fails closed (503
+on a consume transport error, 403 on deny).
+
+| Flag | Path | Consume endpoint | Proxied to |
+|---|---|---|---|
+| `guac_tunnel` / `guac_tunnel_path` | `/guac/tunnel` | `POST /guac/consume` | `guac_backend` (the Node tunnel) |
+| `rtsp_tunnel_path` | `/rtsp/stream` | `POST /rtsp/consume` | `rtsp_backend` (the Python RTSP bridge) |
+
+`guac_tunnel` is the whole-host variant for DB-driven guac routes; the `*_path`
+flags are set on the portal route, because guac and rtsp resources carry no
+public host of their own.
 
 ### Bot filter (`internal/botfilter`)
 
@@ -145,6 +157,7 @@ rejection; validation errors abort startup.
 | `auth_backend` | | Backend serving `/gateway/*` for the auth host (the authz service) |
 | `gateway_cookie_name` | `__Secure-gw` | Cookie extracted for authz and stripped upstream |
 | `guac_backend` | empty | Tunnel origin for DB vnc/rdp/ssh resources; empty disables guac routes |
+| `rtsp_backend` | empty | RTSP bridge origin (`http://127.0.0.1:8700`); required by `rtsp_tunnel_path`, empty disables rtsp streams |
 | `routes_refresh_secs` | `10` | DB route poll interval |
 | `lan_cidrs` | auto | LAN allowlist for `lan_only` routes; empty auto-detects host interface IPv4 subnets (fails closed if none resolve) |
 | `lan_only_redirect` | empty | Where blocked GET/HEAD browsers are sent; non-GET/HEAD or empty -> 403 |
@@ -162,7 +175,7 @@ rejection; validation errors abort startup.
 | `block_any_resolvable_ptr` | `false` | Drop any IP with any PTR record (aggressive) |
 | `botfilter_cache_ttl_secs` | `300` | Per-IP verdict cache TTL |
 | `botfilter_allow_cidrs` | `[]` | Extra never-blocked source networks. Loopback/private/CGNAT and our own resolved public IPs are always exempt without config |
-| `routes` | | Static infra routes: host -> `{backend, backend_port?, auth?, guac_tunnel?, guac_tunnel_path?, lan_only?}` |
+| `routes` | | Static infra routes: host -> `{backend, backend_port?, auth?, guac_tunnel?, guac_tunnel_path?, rtsp_tunnel_path?, lan_only?}` |
 
 Note: `config.example.json` documents everything, including bot filter and
 `lan_only` fields a given deployment may not use; the rendered production

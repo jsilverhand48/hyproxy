@@ -17,6 +17,7 @@ import { AuthEvents } from "./views/AuthEvents";
 import { PolicyChanges } from "./views/PolicyChanges";
 import { MyResources } from "./views/MyResources";
 import { Connect } from "./views/Connect";
+import { Watch } from "./views/Watch";
 import { Downloads } from "./views/Downloads";
 import { Account } from "./views/Account";
 // Graveyard-theme chrome assets. Imported so Vite fingerprints them into
@@ -91,10 +92,14 @@ export function App() {
       </div>
     );
 
-  // Full-screen guac session view; the resource id is authorized server-side
-  // (token mint + portal listing), the path only selects the view.
+  // Full-screen guac session and rtsp camera views; the resource id is
+  // authorized server-side (token mint + portal listing), the path only
+  // selects the view.
   const connectMatch = window.location.pathname.match(/^\/connect\/([0-9a-f-]{36})$/i);
   if (connectMatch) return <Connect resourceId={connectMatch[1]} />;
+
+  const watchMatch = window.location.pathname.match(/^\/watch\/([0-9a-f-]{36})$/i);
+  if (watchMatch) return <Watch resourceId={watchMatch[1]} />;
 
   const sections = visibleSections();
   const active = sections.find((s) => s.id === section) ?? sections[0];

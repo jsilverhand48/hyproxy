@@ -79,7 +79,7 @@ class Resource(Base):
     __tablename__ = "resources"
     __table_args__ = (
         CheckConstraint(
-            "protocol IN ('http','https','tcp','vnc','rdp','ssh')",
+            "protocol IN ('http','https','tcp','vnc','rdp','ssh','rtsp')",
             name="resources_protocol_check",
         ),
     )
@@ -97,17 +97,23 @@ class Resource(Base):
 
 
 class ResourceConnection(Base):
-    """Guacamole connection parameters for a non-HTTP resource (Phase 4).
+    """Connection parameters for a non-HTTP resource (Phase 4).
 
     One row per resource. Secret parameters (passwords, private keys) are sealed
     with AES-256-GCM under the master key exactly like TOTP secrets; only the
     parameter names live in cleartext (`secret_keys`) so the admin UI can show
-    which secrets are set without ever decrypting them."""
+    which secrets are set without ever decrypting them.
+
+    vnc/rdp/ssh rows feed the Guacamole broker. rtsp rows describe a camera:
+    `hostname`, `port`, and `params_json["path"]` (the stream path). They carry
+    NO sealed secret - RTSP credentials are supplied by the viewer per session
+    and never persisted."""
 
     __tablename__ = "resource_connections"
     __table_args__ = (
         CheckConstraint(
-            "protocol IN ('vnc','rdp','ssh')", name="resource_connections_protocol_check"
+            "protocol IN ('vnc','rdp','ssh','rtsp')",
+            name="resource_connections_protocol_check",
         ),
     )
 
@@ -138,6 +144,29 @@ class GuacGrant(Base):
 
     __tablename__ = "guac_grants"
     __table_args__ = (Index("ix_guac_grants_expires_at", "expires_at"),)
+
+    token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    resource_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"))
+    connection_id: Mapped[uuid.UUID]
+    source_ip: Mapped[str] = mapped_column(INET)
+    issued_at: Mapped[datetime] = mapped_column(server_default=NOW)
+    expires_at: Mapped[datetime]
+    consumed_at: Mapped[datetime | None]
+
+
+class RtspGrant(Base):
+    """Single-use, short-lived authorization to open an RTSP stream bridge for a
+    resolved connection. Minted by the broker after a policy allow; consumed by
+    the data plane on WebSocket connect (where gateway-session liveness is
+    re-checked). The token itself is opaque to us; we store only its hash.
+
+    Deliberately a separate table from guac_grants: the two brokers evolve
+    independently, and a grant here carries no stored credential at all - the
+    viewer's RTSP username/password live only inside the encrypted token."""
+
+    __tablename__ = "rtsp_grants"
+    __table_args__ = (Index("ix_rtsp_grants_expires_at", "expires_at"),)
 
     token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))

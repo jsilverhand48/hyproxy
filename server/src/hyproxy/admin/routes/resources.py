@@ -6,7 +6,12 @@ from sqlalchemy import select
 
 from hyproxy.admin.changes import record_change
 from hyproxy.admin.deps import AdminDep, DbDep, StepUpDep
-from hyproxy.admin.schemas import GUAC_PROTOCOLS, ResourceCreate, ResourceOut, ResourcePatch
+from hyproxy.admin.schemas import (
+    TUNNEL_PROTOCOLS,
+    ResourceCreate,
+    ResourceOut,
+    ResourcePatch,
+)
 from hyproxy.config import get_settings
 from hyproxy.core import secrets
 from hyproxy.db.models import Resource, ResourceConnection
@@ -114,10 +119,11 @@ async def patch_resource(
         raise HTTPException(status_code=404, detail="resource not found")
     patch = body.model_dump(exclude_unset=True)
     if "public_host" in patch:
-        if patch["public_host"] is not None and row.protocol in GUAC_PROTOCOLS:
+        if patch["public_host"] is not None and row.protocol in TUNNEL_PROTOCOLS:
             raise HTTPException(
                 status_code=422,
-                detail="guac resources use the portal tunnel and cannot have a public_host",
+                detail="tunnelled resources are reached via the portal "
+                "and cannot have a public_host",
             )
         await _validate_public_host(db, patch["public_host"], exclude_id=resource_id)
     before = _snapshot(row)

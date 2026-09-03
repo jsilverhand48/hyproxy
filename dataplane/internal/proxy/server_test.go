@@ -22,6 +22,8 @@ type fakeAuthz struct {
 
 	guacAllowed bool
 	guacErr     error
+	rtspAllowed bool
+	rtspErr     error
 	lastConsume authz.ConsumeRequest
 }
 
@@ -33,6 +35,11 @@ func (f *fakeAuthz) Check(_ context.Context, req authz.CheckRequest) (authz.Chec
 func (f *fakeAuthz) ConsumeGuac(_ context.Context, req authz.ConsumeRequest) (bool, error) {
 	f.lastConsume = req
 	return f.guacAllowed, f.guacErr
+}
+
+func (f *fakeAuthz) ConsumeRtsp(_ context.Context, req authz.ConsumeRequest) (bool, error) {
+	f.lastConsume = req
+	return f.rtspAllowed, f.rtspErr
 }
 
 type captured struct {

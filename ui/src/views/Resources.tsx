@@ -6,7 +6,9 @@ import { AsyncBody, Banner, Section } from "../components/ui";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ResourceDialog } from "../components/ResourceDialog";
 
-const GUAC_PROTOCOLS = new Set(["vnc", "rdp", "ssh"]);
+// Reached through a fixed path on the portal host, so they never carry a
+// public host of their own.
+const TUNNEL_PROTOCOLS = new Set(["vnc", "rdp", "ssh", "rtsp"]);
 
 export function Resources() {
   const { data, error, loading, reload } = useResource<Resource[]>("/resources");
@@ -51,7 +53,7 @@ export function Resources() {
                 <td>{r.name}</td>
                 <td>{r.protocol}</td>
                 <td>
-                  {GUAC_PROTOCOLS.has(r.protocol) ? (
+                  {TUNNEL_PROTOCOLS.has(r.protocol) ? (
                     <span className="muted">(tunnel)</span>
                   ) : (
                     r.public_host ?? <span className="muted">(no route)</span>

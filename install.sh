@@ -646,17 +646,32 @@ else
   c_info "guac disabled (enable later: docker compose run --rm cli gen-guac-key, then set HYPROXY_GUAC_CYPHER_KEY in .env)"
 fi
 
+# --- 8c. RTSP cipher key -------------------------------------------------------
+# The broker mints stream tokens with this and the rtspbridge service decrypts
+# them; both read it from the same compose env, so one value covers both.
+if [ -n "${HYPROXY_RTSP_CYPHER_KEY:-}" ]; then
+  c_info "rtsp enabled: keeping the existing HYPROXY_RTSP_CYPHER_KEY from .env"
+else
+  c_info "minting an RTSP cipher key"
+  RKEY="$(runuser -u hyproxy -- docker compose run --rm cli gen-rtsp-key 2>/dev/null | tr -d '\r' | tail -n1)"
+  if [ -n "$RKEY" ]; then printf 'HYPROXY_RTSP_CYPHER_KEY=%s\n' "$RKEY" >> "$HYPROXY_INSTALL_DIR/.env"
+  else c_warn "could not mint an rtsp key; set HYPROXY_RTSP_CYPHER_KEY in .env by hand"; fi
+fi
+
 # --- 9. Render the data-plane config -------------------------------------------
 # The data plane is the sole public TLS ingress. idp and admin are proxied with
-# auth disabled (they authenticate independently); application routes are
-# DB-driven and hot-loaded from the control plane, so only the infra routes are
-# rendered here. Static routes win on host conflict.
+# auth disabled (they authenticate independently); apps additionally serves the
+# Guacamole WS tunnel on /guac/tunnel and the RTSP stream bridge WS on
+# /rtsp/stream. Application routes are DB-driven and hot-loaded from the control
+# plane, so only the infra routes are rendered here. Static routes win on host
+# conflict.
 c_info "rendering dataplane/config.json"
 DP_OUT="${DP_OUT:-$HYPROXY_INSTALL_DIR/dataplane/config.json}"
 IDP_BACKEND="${IDP_BACKEND:-http://127.0.0.1:8300}"
 ADMIN_BACKEND="${ADMIN_BACKEND:-http://127.0.0.1:8400}"
 AUTHZ_BACKEND="${AUTHZ_BACKEND:-http://127.0.0.1:8500}"
 GUAC_BACKEND="${GUAC_BACKEND:-http://127.0.0.1:8600}"
+RTSP_BACKEND="${RTSP_BACKEND:-http://127.0.0.1:8700}"
 ROUTES_REFRESH_SECS="${ROUTES_REFRESH_SECS:-10}"
 case "${DP_UPSTREAM_INSECURE_SKIP_VERIFY:-false}" in
   true|1|yes) UPSTREAM_INSECURE=true ;;
@@ -674,6 +689,7 @@ cat > "$DP_OUT" <<EOF
   "auth_backend": "$AUTHZ_BACKEND",
   "gateway_cookie_name": "__Secure-gw",
   "guac_backend": "$GUAC_BACKEND",
+  "rtsp_backend": "$RTSP_BACKEND",
   "routes_refresh_secs": $ROUTES_REFRESH_SECS,
   "upstream_insecure_skip_verify": $UPSTREAM_INSECURE,
   "log_dir": "$HYPROXY_LOG_DIR",
@@ -683,7 +699,7 @@ cat > "$DP_OUT" <<EOF
   "routes": {
     "idp.$HYPROXY_DOMAIN": { "backend": "$IDP_BACKEND", "auth": false },
     "admin.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false },
-    "apps.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false, "guac_tunnel_path": true }
+    "apps.$HYPROXY_DOMAIN": { "backend": "$ADMIN_BACKEND", "auth": false, "guac_tunnel_path": true, "rtsp_tunnel_path": true }
   }
 }
 EOF
