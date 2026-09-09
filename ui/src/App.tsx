@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   beginLogin,
   completeLogin,
@@ -57,6 +57,12 @@ export function App() {
   const [boot, setBoot] = useState<Boot>("loading");
   const [error, setError] = useState<string | null>(null);
   const [section, setSection] = useState<string | null>(null);
+  // Off-canvas drawer state. Only has an effect below the compact breakpoint
+  // (see styles.css); on desktop the sidebar is always in the grid and .topbar
+  // is display:none, so this stays false and costs nothing.
+  const [navOpen, setNavOpen] = useState(false);
+  const hamburgerRef = useRef<HTMLButtonElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +89,25 @@ export function App() {
     };
   }, []);
 
+  // While the drawer covers the page: Escape closes it, the page behind must not
+  // scroll, and focus moves into the drawer and back to the toggle on close.
+  // There is no focus trap, matching the existing Modal in ConfirmDialog.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    drawerRef.current?.querySelector<HTMLButtonElement>("button.nav")?.focus();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+      hamburgerRef.current?.focus();
+    };
+  }, [navOpen]);
+
   if (boot === "loading") return <p className="center">Signing in...</p>;
   if (boot === "error")
     return (
@@ -107,7 +132,27 @@ export function App() {
   // (my-resources / downloads / account) keep the plain dark theme.
   const isAdminView = ADMIN_SECTIONS.some((s) => s.id === active.id);
   return (
-    <div className={isAdminView ? "layout theme-crypt" : "layout"}>
+    <div
+      className={`layout${isAdminView ? " theme-crypt" : ""}${navOpen ? " nav-open" : ""}`}
+    >
+      {/* Mobile chrome only: styles.css keeps .topbar display:none above the
+          compact breakpoint, and a display:none grid child contributes no track,
+          so the desktop grid -- including .layout.theme-crypt's marquee row --
+          is untouched by this existing. */}
+      <div className="topbar">
+        <button
+          className="hamburger"
+          ref={hamburgerRef}
+          aria-label={navOpen ? "Close menu" : "Open menu"}
+          aria-expanded={navOpen}
+          aria-controls="sidebar-nav"
+          onClick={() => setNavOpen((o) => !o)}
+        >
+          <span aria-hidden="true">&#9776;</span>
+        </button>
+        <span className="topbar-title">hyproxy</span>
+        <span className="topbar-section">{active.label}</span>
+      </div>
       {isAdminView && (
         <>
           <div className="crypt-marquee" aria-hidden="true">
@@ -123,14 +168,18 @@ export function App() {
           <img className="cobweb cobweb-tr" src={cobwebGif} width={48} height={48} alt="" aria-hidden="true" />
         </>
       )}
-      <nav className="sidebar">
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} />}
+      <nav className="sidebar" id="sidebar-nav" ref={drawerRef}>
         <h1>hyproxy</h1>
         <ul>
           {sections.map((s) => (
             <li key={s.id}>
               <button
                 className={s.id === active.id ? "nav active" : "nav"}
-                onClick={() => setSection(s.id)}
+                onClick={() => {
+                  setSection(s.id);
+                  setNavOpen(false);
+                }}
               >
                 {s.label}
               </button>

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import type { Resource } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
-import { AsyncBody, Banner, Section } from "../components/ui";
+import { AsyncBody, Banner, Section, TableWrap } from "../components/ui";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ResourceDialog } from "../components/ResourceDialog";
 
@@ -35,48 +35,50 @@ export function Resources() {
       </div>
 
       <AsyncBody loading={loading} error={error} empty={(data ?? []).length === 0}>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Protocol</th>
-              <th>Public host</th>
-              <th>Backend host</th>
-              <th>Ports</th>
-              <th>Enabled</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data ?? []).map((r) => (
-              <tr key={r.id}>
-                <td>{r.name}</td>
-                <td>{r.protocol}</td>
-                <td>
-                  {TUNNEL_PROTOCOLS.has(r.protocol) ? (
-                    <span className="muted">(tunnel)</span>
-                  ) : (
-                    r.public_host ?? <span className="muted">(no route)</span>
-                  )}
-                </td>
-                <td>{r.host}</td>
-                <td>{r.ports.join(", ")}</td>
-                <td>{r.enabled ? "yes" : "no"}</td>
-                <td className="actions">
-                  <button className="link" onClick={() => setDialog({ resource: r })}>
-                    Edit
-                  </button>
-                  <button className="link" onClick={() => toggle(r)}>
-                    {r.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button className="link danger" onClick={() => setPendingDelete(r)}>
-                    Delete
-                  </button>
-                </td>
+        <TableWrap>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Protocol</th>
+                <th>Public host</th>
+                <th>Backend host</th>
+                <th>Ports</th>
+                <th>Enabled</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(data ?? []).map((r) => (
+                <tr key={r.id}>
+                  <td data-label="Name">{r.name}</td>
+                  <td data-label="Protocol">{r.protocol}</td>
+                  <td data-label="Public host">
+                    {TUNNEL_PROTOCOLS.has(r.protocol) ? (
+                      <span className="muted">(tunnel)</span>
+                    ) : (
+                      r.public_host ?? <span className="muted">(no route)</span>
+                    )}
+                  </td>
+                  <td data-label="Backend host">{r.host}</td>
+                  <td data-label="Ports">{r.ports.join(", ")}</td>
+                  <td data-label="Enabled">{r.enabled ? "yes" : "no"}</td>
+                  <td className="actions" data-label="">
+                    <button className="link" onClick={() => setDialog({ resource: r })}>
+                      Edit
+                    </button>
+                    <button className="link" onClick={() => toggle(r)}>
+                      {r.enabled ? "Disable" : "Enable"}
+                    </button>
+                    <button className="link danger" onClick={() => setPendingDelete(r)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
       </AsyncBody>
       {dialog !== null && (
         <ResourceDialog

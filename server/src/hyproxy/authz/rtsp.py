@@ -47,8 +47,16 @@ async def rtsp_token(body: TokenRequest, request: Request, db: DbDep) -> Respons
     settings = get_settings()
     now = datetime.now(UTC)
     ip = client_ip(request)
+    # enforce_ip=False: the mint and the stream WebSocket are separate
+    # connections to separate hosts, and a phone's egress address routinely
+    # differs between them. The grant this issues is still IP-bound, single-use
+    # and short-lived, so the stream authorization keeps its own binding.
     gw = await resolve_gateway_session(
-        db, request.cookies.get(settings.gateway_cookie_name), source_ip=ip, now=now
+        db,
+        request.cookies.get(settings.gateway_cookie_name),
+        source_ip=ip,
+        now=now,
+        enforce_ip=False,
     )
     if gw is None:
         return JSONResponse({"error": "auth_required"}, status_code=401)
@@ -79,11 +87,15 @@ async def rtsp_consume(body: ConsumeRequest, request: Request, db: DbDep) -> Res
     settings = get_settings()
     now = datetime.now(UTC)
     ip = body.source_ip or client_ip(request)
+    # enforce_ip=False for the same reason as /token; consume_grant below still
+    # requires the grant's own IP match, so the token cannot be replayed from
+    # another address.
     gw = await resolve_gateway_session(
         db,
         body.gateway_cookie or request.cookies.get(settings.gateway_cookie_name),
         source_ip=ip,
         now=now,
+        enforce_ip=False,
     )
     if gw is None:
         return JSONResponse({"decision": "deny", "reason": "auth_required"}, status_code=401)

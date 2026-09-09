@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { isAdmin } from "../lib/auth";
 import type { DownloadRequest } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
-import { AsyncBody, Banner, Section } from "../components/ui";
+import { AsyncBody, Banner, Section, TableWrap } from "../components/ui";
 
 // Client-side fast feedback only; the server is authoritative
 // (MAGNET_RE in server/src/hyproxy/admin/schemas.py).
@@ -18,6 +18,9 @@ export function Downloads() {
   const [kind, setKind] = useState<"error" | "info">("info");
   const [magnet, setMagnet] = useState("");
   const [target, setTarget] = useState<"shows" | "movies">("shows");
+  // Row whose failure reason is expanded. It used to live only in a title
+  // tooltip, which touch cannot show and the keyboard cannot reach.
+  const [shownError, setShownError] = useState<string | null>(null);
 
   async function submit() {
     if (!MAGNET_RE.test(magnet.trim())) {
@@ -75,53 +78,64 @@ export function Downloads() {
       {!admin && <p className="muted">Requests are queued until an administrator approves them.</p>}
 
       <AsyncBody loading={loading} error={error} empty={(data ?? []).length === 0}>
-        <table>
-          <thead>
-            <tr>
-              {admin && <th>Requested by</th>}
-              <th>Magnet</th>
-              <th>Destination</th>
-              <th>Status</th>
-              <th>Requested</th>
-              {admin && <th></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {(data ?? []).map((r) => (
-              <tr key={r.id}>
-                {admin && <td>{r.user_email ?? r.user_id}</td>}
-                <td className="mono magnet" title={r.magnet}>
-                  {r.magnet}
-                </td>
-                <td>{r.target === "shows" ? "Shows" : "Movies"}</td>
-                <td>
-                  <span className={`status ${r.status}`}>{r.status}</span>
-                  {r.error && r.status === "pending" && (
-                    <span className="error" title={r.error}>
-                      {" "}
-                      (failed)
-                    </span>
-                  )}
-                </td>
-                <td>{new Date(r.created_at).toLocaleString()}</td>
-                {admin && (
-                  <td className="actions">
-                    {r.status === "pending" && (
+        <TableWrap>
+          <table>
+            <thead>
+              <tr>
+                {admin && <th>Requested by</th>}
+                <th>Magnet</th>
+                <th>Destination</th>
+                <th>Status</th>
+                <th>Requested</th>
+                {admin && <th></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {(data ?? []).map((r) => (
+                <tr key={r.id}>
+                  {admin && <td data-label="Requested by">{r.user_email ?? r.user_id}</td>}
+                  {/* Truncated with an ellipsis on desktop; the compact query
+                      unclamps it so the whole URI is readable in the card. */}
+                  <td className="mono magnet" data-label="Magnet" title={r.magnet}>
+                    {r.magnet}
+                  </td>
+                  <td data-label="Destination">{r.target === "shows" ? "Shows" : "Movies"}</td>
+                  <td data-label="Status">
+                    <span className={`status ${r.status}`}>{r.status}</span>
+                    {r.error && r.status === "pending" && (
                       <>
-                        <button className="link" onClick={() => void review(r, "approve")}>
-                          Approve
+                        {" "}
+                        <button
+                          className="link danger"
+                          aria-expanded={shownError === r.id}
+                          onClick={() => setShownError(shownError === r.id ? null : r.id)}
+                        >
+                          (failed)
                         </button>
-                        <button className="link danger" onClick={() => void review(r, "deny")}>
-                          Deny
-                        </button>
+                        {shownError === r.id && <span className="error">{r.error}</span>}
                       </>
                     )}
                   </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <td data-label="Requested">{new Date(r.created_at).toLocaleString()}</td>
+                  {admin && (
+                    <td className="actions" data-label="">
+                      {r.status === "pending" && (
+                        <>
+                          <button className="link" onClick={() => void review(r, "approve")}>
+                            Approve
+                          </button>
+                          <button className="link danger" onClick={() => void review(r, "deny")}>
+                            Deny
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
       </AsyncBody>
     </Section>
   );

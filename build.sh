@@ -318,7 +318,7 @@ cleanup() {
 
   # --- 3. Control-plane apps (uvicorn: idp / admin / authz) ---------------------
   step "control-plane apps"
-  kill_pat "uvicorn (idp/admin/authz)" "uvicorn hyproxy\.(idp|admin|authz)\.app:app"
+  kill_pat "uvicorn (idp/admin/authz/rtsp)" "uvicorn hyproxy\.(idp|admin|authz|rtsp)\.app:app"
 
   # --- 4. Docker Compose stack -------------------------------------------------
   step "docker containers"

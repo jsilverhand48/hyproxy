@@ -79,8 +79,9 @@ Request flows worth understanding before reading any code:
    consumes the grant via `/rtsp/consume` and proxies
    `wss://apps.example.com/rtsp/stream?token=...` to the RTSP bridge, which
    decrypts the token and runs ffmpeg to remux the RTSP feed into fragmented
-   MP4. The browser plays it in a plain `<video>` through MediaSource: no
-   plugin, no extra public port, ~1-2s behind live.
+   MP4. The browser plays it in a plain `<video>` through a Media Source
+   (`MediaSource`, or `ManagedMediaSource` on iPhone, which has no other):
+   no plugin, no extra public port, ~1-2s behind live.
 
 ## Repository layout
 

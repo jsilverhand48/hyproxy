@@ -213,9 +213,20 @@ def set_gateway_cookie(response: Response, value: str) -> None:
 
 
 async def resolve_gateway_session(
-    db: AsyncSession, cookie_value: str | None, *, source_ip: str, now: datetime
+    db: AsyncSession,
+    cookie_value: str | None,
+    *,
+    source_ip: str,
+    now: datetime,
+    enforce_ip: bool = True,
 ) -> GatewaySession | None:
-    """Gateway cookie -> live gateway session with a live IdP session behind it."""
+    """Gateway cookie -> live gateway session with a live IdP session behind it.
+
+    `enforce_ip` defaults to True, which is what every request-path caller wants
+    and must keep: /authz/check binds each proxied request to the session's
+    origin. Callers that legitimately observe a different client IP than the one
+    the session was created from pass False (see the RTSP endpoints).
+    """
     if not cookie_value or "." not in cookie_value:
         return None
     gw_id_str, _, secret = cookie_value.partition(".")
@@ -230,12 +241,21 @@ async def resolve_gateway_session(
         return None
     # IP-bind against the gateway session's own origin. Both this value (set at
     # /gateway/callback) and the source_ip on every caller are observed at the
-    # data plane, the single ingress, so they agree. The IdP session is bound to
+    # data plane, the single ingress, so they agree -- for a client with one
+    # stable egress address. A mobile client does not have that: the token mint
+    # and the media WebSocket are two separate connections to two different
+    # hosts, and a phone's egress address legitimately differs between them
+    # (CGNAT pools, happy-eyeballs picking v6 for one host and v4/NAT64 for the
+    # other, Wi-Fi<->cellular handoff mid-prompt, iCloud Private Relay egressing
+    # per-connection). Those callers pass enforce_ip=False and rest on the cookie
+    # secret, session liveness, and their own single-use IP-bound grant instead;
+    # this is the same trade already made for the browser->IdP hop in
+    # idp/flows.py. The IdP session is bound to
     # the separate browser->IdP hop, whose vantage point need not resolve to the
     # same client IP, so inherit only its liveness/revocation here
     # (enforce_ip=False) rather than tripping a spurious re-auth loop on the
     # cross-plane IP mismatch.
-    if str(gw.source_ip) != source_ip:
+    if enforce_ip and str(gw.source_ip) != source_ip:
         return None
     idp_session = await db.get(Session, gw.idp_session_id)
     if idp_session is None:

@@ -14,6 +14,37 @@
   box-sizing: border-box;
 }
 
+/* ==========================================================================
+   RESPONSIVE CONVENTION -- read this before adding any media query.
+
+   ONE width breakpoint for the whole app: max-width 60em (960px), called
+   "compact" below. 932px is the widest phone viewport (iPhone Pro Max in
+   landscape) and 1024px the narrowest tablet in landscape, so every phone gets
+   the drawer + card layout in BOTH orientations while no tablet or desktop
+   layout changes at all. Do not add a second width breakpoint without a reason
+   that cannot be solved inside this one.
+
+   Touch sizing (16px inputs, >=44px tap targets) is deliberately NOT
+   width-based: it hangs off @media (hover: none) and (pointer: coarse). iOS
+   auto-zooms on focus for any input under 16px and fat fingers need 44px, and
+   both are properties of the input DEVICE, not the viewport -- an iPad at
+   1024px needs them while a narrow desktop window must keep its dense layout.
+   Keep that block to sizing and typography only; any layout rule in there
+   would give a large touchscreen a phone layout.
+
+   z-index scale. The theme cobwebs are the fixed point: they are
+   position: fixed; z-index: 50 and must keep working (the retro theme is
+   deliberately untouched), so new chrome layers around them:
+      50  .theme-crypt .cobweb   decoration, pointer-events: none
+      60  .topbar                compact only
+      70  .nav-backdrop          compact only
+      80  .sidebar (as drawer)   compact only
+     100  .modal-overlay         stays on top of everything
+   ========================================================================== */
+:root {
+  --topbar-h: 3rem;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -31,7 +62,29 @@ body {
 .layout {
   display: grid;
   grid-template-columns: 220px 1fr;
+  /* dvh after vh, never instead of it: browsers without dvh keep the old
+     behaviour, and mobile browser chrome stops eating the bottom of the page. */
   min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Mobile chrome: a slim bar carrying the drawer toggle. display:none outside
+   the compact query is load-bearing -- a display:none grid child contributes no
+   track, so the desktop grid (and .layout.theme-crypt's marquee row) is
+   completely unaffected by this element existing. */
+.topbar {
+  display: none;
+}
+
+.nav-backdrop {
+  display: none;
+}
+
+/* Owns horizontal scroll for one table, so section headings, toolbars and
+   pagination no longer scroll away with a wide table the way they do when
+   .content is the only scroll container. */
+.table-wrap {
+  overflow-x: auto;
 }
 
 .sidebar {
@@ -233,6 +286,11 @@ th {
   padding: 1rem 1.25rem;
   max-width: 420px;
   width: 90%;
+  /* ResourceDialog's rtsp/guac branches are 10+ controls tall. Without these
+     the box is vertically centred with no way to reach its submit row in a
+     short viewport (phone landscape). */
+  max-height: 85dvh;
+  overflow-y: auto;
 }
 
 .modal h3 {
@@ -348,6 +406,18 @@ th {
   border-right: 1px solid var(--line);
   box-shadow: inset -6px 0 14px rgba(0, 0, 0, 0.6);
 }
+/* the mobile top bar belongs to the crypt too, rather than looking bolted on */
+.theme-crypt .topbar {
+  background: linear-gradient(#0d100d, #060706);
+  border-bottom: 1px solid var(--line);
+}
+.theme-crypt .topbar-title {
+  font-family: "Chiller", "Papyrus", "Impact", fantasy;
+  font-size: 1.3rem;
+  letter-spacing: 2px;
+  color: #b7f0ad;
+  text-shadow: 0 0 8px rgba(121, 217, 112, 0.7);
+}
 .theme-crypt .sidebar h1 {
   font-family: "Chiller", "Papyrus", "Impact", fantasy;
   font-size: 1.7rem;
@@ -428,12 +498,16 @@ th {
 @media (prefers-reduced-motion: reduce) {
   .theme-crypt .crypt-marquee-track { animation: none; }
   .theme-crypt .sidebar h1 { animation: none; }
+  /* the mobile drawer slide (see the compact query at the end of this file) */
+  .sidebar { transition: none; }
 }
 
 /* guac connect view (full-screen remote session) */
 .connect-view {
   position: fixed;
   inset: 0;
+  /* dvh so the session is not clipped by mobile browser chrome. */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: #000;
@@ -460,6 +534,7 @@ th {
 .watch-view {
   position: fixed;
   inset: 0;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: #000;
@@ -486,4 +561,289 @@ th {
   width: 100%;
   background: var(--panel);
   border: 1px solid var(--line);
+}
+
+/* ==========================================================================
+   COMPACT LAYOUT (phones, and phones in landscape). See the RESPONSIVE
+   CONVENTION block at the top of this file for why 60em and why touch sizing
+   lives in a separate, device-based query below.
+
+   Everything here is additive: no desktop rule above is deleted, so at >=60em
+   the app renders exactly as it did before this block existed.
+   ========================================================================== */
+@media (max-width: 60em) {
+  /* One column. The sidebar leaves the grid entirely (position: fixed, below),
+     and .topbar joins it as row 1, so the in-flow children are:
+       portal: topbar / main          admin: topbar / marquee / main          */
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .layout.theme-crypt {
+    grid-template-rows: auto auto 1fr;
+  }
+
+  .content {
+    padding: 1rem;
+  }
+
+  .section-head {
+    /* No flex-wrap on desktop, so the audit views' filter controls currently
+       collide with the heading instead of dropping below it. */
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* Every .row is a form or filter cluster; one control per line beats a ragged
+     wrapped flex row. This single rule handles Account's three side-by-side
+     password fields, Policies' three selects and Users' six-control create row
+     without touching any view. Add .row-inline to opt a pure toolbar out. */
+  .row > input,
+  .row > select,
+  .row > textarea,
+  .row > button,
+  .row > label {
+    flex: 1 1 100%;
+  }
+  .row.row-inline > * {
+    flex: 0 1 auto;
+  }
+  /* A long option label must not widen the whole form. */
+  .row > select {
+    max-width: 100%;
+  }
+
+  /* Fixed widths that force horizontal overflow on a phone. */
+  .grow {
+    min-width: 0;
+  }
+  .mono {
+    max-width: none;
+  }
+  /* The full magnet URI is otherwise only reachable via the title tooltip,
+     which touch has no way to show. Let it wrap into the card instead. */
+  .magnet {
+    max-width: none;
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  /* Both full-screen media bars carry up to five children with no wrap. */
+  .connect-bar,
+  .watch-bar {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .modal-overlay {
+    padding: 1rem;
+  }
+  .modal {
+    width: 100%;
+    max-width: 28rem;
+  }
+  .modal-actions {
+    flex-wrap: wrap;
+  }
+
+  /* ---- mobile chrome: top bar + off-canvas drawer ---------------------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    grid-column: 1 / -1;
+    height: var(--topbar-h);
+    padding: 0 0.5rem;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    position: relative;
+    z-index: 60;
+  }
+  .topbar-title {
+    font-weight: 600;
+  }
+  .topbar-section {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-left: auto;
+  }
+  .hamburger {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    line-height: 1;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(80vw, 17rem);
+    z-index: 80;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* visibility keeps the off-screen nav buttons out of the tab order and the
+       accessibility tree; its transition is delayed so the slide-out still
+       animates on the way closed. */
+    visibility: hidden;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+  }
+  .layout.nav-open .sidebar {
+    visibility: visible;
+    transform: none;
+    transition: transform 0.2s ease, visibility 0s;
+  }
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 70;
+  }
+
+  /* The graveyard decorations are deliberately unchanged -- still fixed, still
+     z-index 50, still pointer-events: none. They are only re-anchored below the
+     new bar so they decorate the content instead of sitting behind it. */
+  .theme-crypt .cobweb {
+    top: var(--topbar-h);
+  }
+
+  /* ---- wide tables become stacked cards --------------------------------
+     Each row is a card and each cell carries its own label in data-label, which
+     is why the role-conditional columns in Downloads need no special case. Cells
+     with data-label="" opt out (action clusters, colSpan detail rows).
+     CONTRACT: every <td> in a .table-wrap table needs a data-label matching its
+     <th> text, or it renders as an unlabelled value. Outside this query
+     data-label has no effect at all, so desktop cannot be affected. */
+  .table-wrap table,
+  .table-wrap thead,
+  .table-wrap tbody,
+  .table-wrap tr,
+  .table-wrap th,
+  .table-wrap td {
+    display: block;
+  }
+  .table-wrap {
+    overflow-x: visible;
+  }
+  .table-wrap thead {
+    display: none;
+  }
+  .table-wrap tbody tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 0.5rem 0.75rem;
+    margin: 0 0 0.75rem;
+  }
+  .table-wrap tbody td {
+    border-bottom: 0;
+    padding: 0.3rem 0;
+    display: grid;
+    grid-template-columns: 7.5rem 1fr;
+    gap: 0.75rem;
+    align-items: start;
+  }
+  .table-wrap tbody td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .table-wrap tbody td[data-label=""] {
+    display: block;
+  }
+  .table-wrap tbody td[data-label=""]::before {
+    content: none;
+  }
+  /* .actions is nowrap on desktop; in a card the buttons need to wrap, and the
+     destructive one is pushed to its own end so Delete is not adjacent to
+     Reset 2FA under a thumb. */
+  .table-wrap tbody td.actions {
+    white-space: normal;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    border-top: 1px solid var(--line);
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+  }
+  .table-wrap tbody td.actions .danger {
+    margin-left: auto;
+  }
+  /* The Users/Roles expander row hangs off the bottom of its parent card. */
+  .table-wrap tbody tr.row-detail {
+    margin-top: -0.5rem;
+    border-top: 0;
+    border-radius: 0 0 8px 8px;
+  }
+}
+
+/* ==========================================================================
+   TOUCH SIZING -- device-based, never width-based. Sizing and typography only.
+   ========================================================================== */
+@media (hover: none) and (pointer: coarse) {
+  /* 16px (1rem) is the threshold below which iOS Safari zooms the page on
+     focus; the app's controls are 0.9rem. min-height gets them to the ~44px
+     tap target both platforms' guidelines ask for. */
+  input,
+  select,
+  textarea,
+  button {
+    font-size: 1rem;
+    padding: 0.6rem 0.75rem;
+    min-height: 2.75rem;
+  }
+  /* .link has zero vertical padding, making text-sized hit areas. */
+  .link {
+    padding: 0.6rem 0.5rem;
+    min-height: 2.75rem;
+  }
+  .chip {
+    padding: 0.35rem 0.35rem 0.35rem 0.75rem;
+  }
+  .chip-x {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    font-size: 1.1rem;
+  }
+  /* The portal's primary actions (Connect / Watch) are plain text links; give
+     them a real target without changing the desktop text-link look. */
+  .action-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.75rem;
+    padding: 0.6rem 1rem;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    text-decoration: none;
+  }
+  /* cursor: none hides the only pointer a touch user has; and the browser must
+     not claim drags that belong to the remote session. */
+  .connect-display {
+    cursor: auto;
+    touch-action: none;
+  }
+}
+
+/* Offscreen input that exists only to raise the phone's on-screen keyboard for
+   the guac session (Connect.tsx). It must stay focusable, so it cannot be
+   display:none or visibility:hidden -- it is moved out of sight instead. */
+.soft-input {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
 }

@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { currentUserEmail } from "../lib/auth";
 import type { Role, User } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
-import { AsyncBody, Banner, Section } from "../components/ui";
+import { AsyncBody, Banner, Section, TableWrap } from "../components/ui";
 import { ConfirmDialog, Modal } from "../components/ConfirmDialog";
 
 // Inline role management for one user. The list endpoint returns role *names*
@@ -46,9 +46,10 @@ function RolePanel({ user, allRoles }: { user: User; allRoles: Role[] }) {
               <button
                 className="link danger chip-x"
                 title="Remove role"
+                aria-label={`Remove role ${name}`}
                 onClick={() => setPendingRemove(name)}
               >
-                &times;
+                <span aria-hidden="true">&times;</span>
               </button>
             </span>
           ))}
@@ -177,78 +178,80 @@ export function Users() {
       </form>
 
       <AsyncBody loading={loading} error={error} empty={(data ?? []).length === 0}>
-        <table>
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Name</th>
-              <th>Tier</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data ?? []).map((u) => (
-              <Fragment key={u.id}>
-                <tr>
-                  <td>{u.email}</td>
-                  <td>{u.display_name}</td>
-                  <td>{u.auth_tier}</td>
-                  <td>{u.status}</td>
-                  <td className="actions">
-                    <button
-                      className="link"
-                      onClick={() => setOpenId(openId === u.id ? null : u.id)}
-                    >
-                      {openId === u.id ? "Hide roles" : "Roles"}
-                    </button>
-                    {u.status === "active"
-                      ? !u.is_protected && (
-                          <button className="link" onClick={() => setStatus(u, "disabled")}>
-                            Disable
-                          </button>
-                        )
-                      : (
-                          <button className="link" onClick={() => setStatus(u, "active")}>
-                            Enable
-                          </button>
-                        )}
-                    <button className="link" onClick={() => setPwTarget(u)}>
-                      Reset password
-                    </button>
-                    {u.auth_tier === "standard" && (
+        <TableWrap>
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Tier</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data ?? []).map((u) => (
+                <Fragment key={u.id}>
+                  <tr>
+                    <td data-label="Email">{u.email}</td>
+                    <td data-label="Name">{u.display_name}</td>
+                    <td data-label="Tier">{u.auth_tier}</td>
+                    <td data-label="Status">{u.status}</td>
+                    <td className="actions" data-label="">
                       <button
                         className="link"
-                        onClick={() => setConfirming({ kind: "reset-totp", user: u })}
+                        onClick={() => setOpenId(openId === u.id ? null : u.id)}
                       >
-                        Reset 2FA
+                        {openId === u.id ? "Hide roles" : "Roles"}
                       </button>
-                    )}
-                    {!u.is_protected && u.email.toLowerCase() !== selfEmail && (
-                      <button
-                        className="link danger"
-                        onClick={() => setConfirming({ kind: "delete", user: u })}
-                      >
-                        Delete
+                      {u.status === "active"
+                        ? !u.is_protected && (
+                            <button className="link" onClick={() => setStatus(u, "disabled")}>
+                              Disable
+                            </button>
+                          )
+                        : (
+                            <button className="link" onClick={() => setStatus(u, "active")}>
+                              Enable
+                            </button>
+                          )}
+                      <button className="link" onClick={() => setPwTarget(u)}>
+                        Reset password
                       </button>
-                    )}
-                  </td>
-                </tr>
-                {openId === u.id && (
-                  <tr>
-                    <td colSpan={5}>
-                      {roles.error ? (
-                        <p className="error">{roles.error}</p>
-                      ) : (
-                        <RolePanel user={u} allRoles={roles.data ?? []} />
+                      {u.auth_tier === "standard" && (
+                        <button
+                          className="link"
+                          onClick={() => setConfirming({ kind: "reset-totp", user: u })}
+                        >
+                          Reset 2FA
+                        </button>
+                      )}
+                      {!u.is_protected && u.email.toLowerCase() !== selfEmail && (
+                        <button
+                          className="link danger"
+                          onClick={() => setConfirming({ kind: "delete", user: u })}
+                        >
+                          Delete
+                        </button>
                       )}
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+                  {openId === u.id && (
+                    <tr className="row-detail">
+                      <td colSpan={5} data-label="">
+                        {roles.error ? (
+                          <p className="error">{roles.error}</p>
+                        ) : (
+                          <RolePanel user={u} allRoles={roles.data ?? []} />
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
       </AsyncBody>
 
       {confirming?.kind === "delete" && (
@@ -290,6 +293,7 @@ export function Users() {
             revoked.
           </p>
           <form
+            className="stack"
             onSubmit={(e) => {
               e.preventDefault();
               void resetPassword(pwTarget, newPw);

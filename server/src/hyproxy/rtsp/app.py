@@ -65,6 +65,14 @@ _AVC_PROFILES = {
     "High 4:4:4 Predictive": "F400",
 }
 _FALLBACK_AVC = "avc1.4D401F"
+# H.264 profiles whose bitstreams mobile hardware decoders reject: 10-bit and
+# 4:2:2/4:4:4 chroma. Desktop Chrome software-decodes them, so a camera left on
+# one of these plays on a laptop and fails on a phone with the same generic
+# "cannot play this format" error. Anything listed here is re-encoded rather
+# than remuxed; _TRANSCODE_ARGS already pins -pix_fmt yuv420p, which is exactly
+# the conversion needed. (Their _AVC_PROFILES entries above are consequently
+# unreachable on the passthrough path, but stay as documentation of the mapping.)
+_MOBILE_HOSTILE_PROFILES = frozenset({"High 10", "High 4:2:2", "High 4:4:4 Predictive"})
 # What we ask libx264 for when transcoding, and the codec string it produces.
 _TRANSCODE_ARGS = [
     "-c:v",
@@ -112,6 +120,15 @@ def _avc_codec_string(profile: str | None, level: int | None) -> str:
     if prefix is None or not level or level <= 0 or level > 255:
         return _FALLBACK_AVC
     return f"avc1.{prefix}{level:02X}"
+
+
+def _can_passthrough(codec_name: str, profile: str | None) -> bool:
+    """True when the probed stream is safe to remux with -c:v copy.
+
+    MSE only plays H.264 at all, and mobile hardware decoders only play its
+    8-bit 4:2:0 profiles, so both gates live here. Everything else transcodes.
+    """
+    return codec_name == "h264" and (profile or "") not in _MOBILE_HOSTILE_PROFILES
 
 
 def _classify_ffmpeg_error(stderr: str) -> str:
@@ -280,9 +297,10 @@ async def _run_stream(
         await _fail(ws, probe_error)
         return
 
-    # H.264 remuxes with no transcode. Anything else (H.265, MJPEG) has to be
-    # re-encoded, because MSE will not play it.
-    passthrough = codec_name == "h264"
+    # Mobile-decodable H.264 remuxes with no transcode. Anything else (H.265,
+    # MJPEG, and the 10-bit/4:2:2/4:4:4 H.264 profiles phones refuse) has to be
+    # re-encoded, because the browser will not play it.
+    passthrough = _can_passthrough(codec_name, profile)
     video_codec = _avc_codec_string(profile, level) if passthrough else _TRANSCODE_AVC
     codec = f"{video_codec}, mp4a.40.2" if audio == "aac" else video_codec
 
@@ -294,7 +312,15 @@ async def _run_stream(
     assert proc.stdout is not None and proc.stderr is not None
     log.info(
         "rtsp stream open",
-        extra={"url": safe_url, "codec": codec, "transcode": not passthrough},
+        extra={
+            "url": safe_url,
+            "codec": codec,
+            "transcode": not passthrough,
+            # Why it transcoded, which is otherwise guesswork from the logs.
+            "probed_codec": codec_name,
+            "probed_profile": profile,
+            "probed_level": level,
+        },
     )
 
     # The watcher resolves the moment the browser goes away. Every read races

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import type { Policy, Resource, Role } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
-import { AsyncBody, Banner, Section } from "../components/ui";
+import { AsyncBody, Banner, Section, TableWrap } from "../components/ui";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 export function Policies() {
@@ -76,35 +76,39 @@ export function Policies() {
         error={policies.error}
         empty={(policies.data ?? []).length === 0}
       >
-        <table>
-          <thead>
-            <tr>
-              <th>Role</th>
-              <th>Resource</th>
-              <th>Action</th>
-              <th>Enabled</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(policies.data ?? []).map((p) => (
-              <tr key={p.id}>
-                <td>{roleName(p.role_id)}</td>
-                <td>{resourceName(p.resource_id)}</td>
-                <td className={p.action === "deny" ? "danger" : ""}>{p.action}</td>
-                <td>{p.enabled ? "yes" : "no"}</td>
-                <td className="actions">
-                  <button className="link" onClick={() => toggle(p)}>
-                    {p.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button className="link danger" onClick={() => setPendingDelete(p)}>
-                    Delete
-                  </button>
-                </td>
+        <TableWrap>
+          <table>
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Resource</th>
+                <th>Action</th>
+                <th>Enabled</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(policies.data ?? []).map((p) => (
+                <tr key={p.id}>
+                  <td data-label="Role">{roleName(p.role_id)}</td>
+                  <td data-label="Resource">{resourceName(p.resource_id)}</td>
+                  <td data-label="Action" className={p.action === "deny" ? "danger" : ""}>
+                    {p.action}
+                  </td>
+                  <td data-label="Enabled">{p.enabled ? "yes" : "no"}</td>
+                  <td className="actions" data-label="">
+                    <button className="link" onClick={() => toggle(p)}>
+                      {p.enabled ? "Disable" : "Enable"}
+                    </button>
+                    <button className="link danger" onClick={() => setPendingDelete(p)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
       </AsyncBody>
       {pendingDelete !== null && (
         <ConfirmDialog

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { Role, User } from "../lib/types";
 import { runMutation, useResource } from "../lib/useApi";
-import { AsyncBody, Banner, Section } from "../components/ui";
+import { AsyncBody, Banner, Section, TableWrap } from "../components/ui";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 // Inline membership management for one role. The backend exposes the user-role
@@ -69,9 +69,10 @@ function MemberPanel({ role, allUsers }: { role: Role; allUsers: User[] }) {
               <button
                 className="link danger chip-x"
                 title="Remove member"
+                aria-label={`Remove member ${u.email}`}
                 onClick={() => setPendingRemove(u)}
               >
-                &times;
+                <span aria-hidden="true">&times;</span>
               </button>
             </span>
           ))}
@@ -155,47 +156,49 @@ export function Roles() {
       </form>
 
       <AsyncBody loading={loading} error={error} empty={(data ?? []).length === 0}>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Description</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data ?? []).map((r) => (
-              <Fragment key={r.id}>
-                <tr>
-                  <td>{r.name}</td>
-                  <td>{r.description}</td>
-                  <td className="actions">
-                    <button
-                      className="link"
-                      onClick={() => setOpenId(openId === r.id ? null : r.id)}
-                    >
-                      {openId === r.id ? "Hide members" : "Members"}
-                    </button>
-                    <button className="link danger" onClick={() => setPendingDelete(r)}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-                {openId === r.id && (
+        <TableWrap>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Description</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data ?? []).map((r) => (
+                <Fragment key={r.id}>
                   <tr>
-                    <td colSpan={3}>
-                      {users.error ? (
-                        <p className="error">{users.error}</p>
-                      ) : (
-                        <MemberPanel role={r} allUsers={users.data ?? []} />
-                      )}
+                    <td data-label="Name">{r.name}</td>
+                    <td data-label="Description">{r.description}</td>
+                    <td className="actions" data-label="">
+                      <button
+                        className="link"
+                        onClick={() => setOpenId(openId === r.id ? null : r.id)}
+                      >
+                        {openId === r.id ? "Hide members" : "Members"}
+                      </button>
+                      <button className="link danger" onClick={() => setPendingDelete(r)}>
+                        Delete
+                      </button>
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+                  {openId === r.id && (
+                    <tr className="row-detail">
+                      <td colSpan={3} data-label="">
+                        {users.error ? (
+                          <p className="error">{users.error}</p>
+                        ) : (
+                          <MemberPanel role={r} allUsers={users.data ?? []} />
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </TableWrap>
       </AsyncBody>
       {pendingDelete !== null && (
         <ConfirmDialog

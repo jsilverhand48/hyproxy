@@ -45,7 +45,7 @@ kill_pat "dataplane binary" "bin/dataplane( |$)|/dataplane/bin/dataplane"
 # also sees containerized processes, so this catches those as well as any
 # instance that was launched directly on the host.
 step "control-plane apps"
-kill_pat "uvicorn (idp/admin/authz)" "uvicorn hyproxy\.(idp|admin|authz)\.app:app"
+kill_pat "uvicorn (idp/admin/authz/rtsp)" "uvicorn hyproxy\.(idp|admin|authz|rtsp)\.app:app"
 
 # --- 3. systemd units --------------------------------------------------------
 # Stops hyproxy.service plus the ACME renewal timer and oneshot, if installed.

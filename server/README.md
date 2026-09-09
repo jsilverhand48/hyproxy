@@ -268,11 +268,15 @@ the latency-critical `/authz/check` path. It runs from the control-plane image
 and `cli` reuse that image. Decrypting the token is its second gate: only the
 broker holds the key.
 
-It `ffprobe`s once, remuxes H.264 with `-c:v copy`, and re-encodes anything else
-(H.265, MJPEG) with libx264, because MSE will not play it. Output is fragmented
-MP4 on stdout. Wire protocol: **text** frames are JSON control
-(`{"type":"ready","codec":...}` / `{"type":"error","reason":...}`), **binary**
-frames are media.
+It `ffprobe`s once, remuxes H.264 **whose profile a mobile hardware decoder will
+accept** with `-c:v copy`, and re-encodes everything else with libx264, because
+the browser will not play it. `_can_passthrough()` owns that decision: H.265 and
+MJPEG have never been playable, and `_MOBILE_HOSTILE_PROFILES` adds the H.264
+profiles phones refuse - **High 10, High 4:2:2, High 4:4:4 Predictive**.
+`_TRANSCODE_ARGS` already pins `-pix_fmt yuv420p`, which is exactly the
+conversion those need. Output is fragmented MP4 on stdout. Wire protocol: **text**
+frames are JSON control (`{"type":"ready","codec":...}` /
+`{"type":"error","reason":...}`), **binary** frames are media.
 
 ### Confusion points
 
@@ -280,10 +284,31 @@ frames are media.
   `/rtsp/token`; a policy deny is 403, matching the guac convention.
 - The probed codec string is sent to the browser because `addSourceBuffer`
   throws if it does not describe the actual stream.
+- A camera left on H.264 **High 10 / 4:2:2 / 4:4:4** plays fine on desktop
+  Chrome, which software-decodes it, and fails on every phone, whose hardware
+  decoder refuses it - with the browser reporting only a generic "cannot play
+  this format". That asymmetry is why passthrough is profile-gated rather than
+  just codec-gated. The corresponding `_AVC_PROFILES` entries stay in the table
+  as documentation but are now unreachable on the passthrough path.
+- The `rtsp stream open` log line carries `probed_codec`, `probed_profile` and
+  `probed_level` alongside `transcode`, so *why* a stream is being re-encoded is
+  visible without reproducing it.
 - ffmpeg echoes the input URL (credentials included) in its errors, so its
   stderr is only ever classified into a reason code, never logged or returned.
-- Transcoding costs real CPU per viewer; `HYPROXY_RTSP_MAX_STREAMS_PER_USER`
-  bounds it, per bridge process.
+- Transcoding costs real CPU per viewer (roughly one core for libx264
+  `veryfast` at 1080p25, plus a 10-bit decode for High 10), and the profile veto
+  makes it more likely; `HYPROXY_RTSP_MAX_STREAMS_PER_USER` bounds it, per bridge
+  process, and the bridge is its own process so it cannot contend with
+  `/authz/check`.
+- **Not** currently gated on H.264 *level*. A 4K camera reporting level 5.1 is
+  passed through and may still be refused by a phone. Fixing that means forcing a
+  transcode above level 4.2, but only together with a resolution cap
+  (`-vf scale=1920:-2`): `_TRANSCODE_ARGS` pins `-level 4.1` while leaving
+  resolution alone, so transcoding 4K without scaling would advertise
+  `avc1.640029` for a stream that is not level-4.1 conformant - trading a broken
+  phone for a broken everything.
+- The two RTSP broker endpoints resolve the gateway session with
+  `enforce_ip=False`; see [Authz](#authz) for why.
 
 ---
 
@@ -488,6 +513,27 @@ The browser-facing OIDC relying party the data plane fronts:
 - `resolve_gateway_session`: IP-binds against the gateway session's own
   origin but checks the linked IdP session with `enforce_ip=False` (the two
   hops legitimately see different IPs).
+
+  Its own `enforce_ip` parameter defaults to `True` and **must stay that way**:
+  `/authz/check` calls it on every proxied request and that binding is the point.
+  The two RTSP endpoints (`/rtsp/token`, `/rtsp/consume`) pass `False`, because
+  the token mint and the media WebSocket are separate connections to separate
+  hosts and a phone's egress address routinely differs between them (CGNAT
+  pools, happy-eyeballs picking v6 for one host and v4/NAT64 for the other,
+  Wi-Fi<->cellular handoff mid-prompt, iCloud Private Relay egressing
+  per-connection). This is the same trade already made for the browser->IdP hop
+  in `idp/flows.py`. What still guards those endpoints: the gateway cookie
+  secret (SHA-256, constant-time), gateway and IdP session liveness and
+  revocation, the policy evaluation in `issue_stream`, and the `RtspGrant`
+  itself - still single-use via conditional UPDATE, still IP-bound, still 60s.
+
+  Note the residual case: relaxing the *session* check fixes a client whose IP
+  changed **before** the mint (both calls then come from the new address), but a
+  client whose IP changes **between** the mint and the WebSocket is still
+  rejected by the grant's own IP match. Relaxing that too would leave the grant
+  resting on single-use plus its 60s TTL alone.
+  The guac endpoints have the identical two-connection shape and are still
+  pinned; revisit once mobile guac sessions get real use.
 - The gateway's DPoP keypair is derived from the master key via HKDF (salt
   `hyproxy-gateway-dpop`), so its thumbprint is stable across restarts and
   nothing is written to disk.

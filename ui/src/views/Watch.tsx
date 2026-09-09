@@ -10,8 +10,26 @@
 // are single-use with a short TTL, so every (re)connect mints a fresh one.
 //
 // The bridge sends fragmented MP4 that the browser plays natively through a
-// MediaSource; there is no player library and no plugin. Text frames are JSON
+// Media Source; there is no player library and no plugin. Text frames are JSON
 // control messages, binary frames are media.
+//
+// There are TWO Media Source implementations to satisfy, which is the whole
+// reason this file is more complicated than "new MediaSource()":
+//
+//   - Desktop browsers and Android Chrome have MediaSource, attached by handing
+//     the <video> a blob: object URL (hence media-src 'self' blob: in the admin
+//     CSP).
+//   - iPhone Safari has NO MediaSource at all. It exposes ManagedMediaSource
+//     (iOS 17.1+), which is attached via srcObject, refuses to work unless the
+//     element has disableRemotePlayback set (it must not be able to hand off to
+//     AirPlay), and emits startstreaming/endstreaming to say when it actually
+//     wants data.
+//
+// MediaSource is preferred wherever it exists so every browser that already
+// worked keeps its exact previous code path; the managed branch is purely
+// additive for iPhone. Autoplay can still be refused (iOS Low Power Mode blocks
+// it even for muted video), so a rejected play() surfaces a Play button rather
+// than a black rectangle that claims to be live.
 
 import { useEffect, useRef, useState } from "react";
 import { config } from "../lib/config";
@@ -31,6 +49,14 @@ interface Credentials {
 const BUFFER_KEEP_SECS = 30;
 const BUFFER_TRIM_ABOVE_SECS = 60;
 
+// The Media Source constructor this browser gives us, or undefined if it has
+// neither. Prefer the unmanaged one where both exist (desktop Safari 17.1+) so
+// that only iPhone, which has no choice, takes the managed path.
+type MseCtor = { new (): MediaSource; isTypeSupported(type: string): boolean };
+const MANAGED_MSE = window.ManagedMediaSource;
+const MSE_CTOR: MseCtor | undefined =
+  typeof window.MediaSource !== "undefined" ? window.MediaSource : MANAGED_MSE;
+
 export function Watch({ resourceId }: { resourceId: string }) {
   const { data, error, loading } = useResource<MyResource[]>("/portal/me/resources");
   const resource = (data ?? []).find((r) => r.id === resourceId) ?? null;
@@ -44,6 +70,9 @@ export function Watch({ resourceId }: { resourceId: string }) {
   // without prompting again. Never written to storage.
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Autoplay was refused (iOS Low Power Mode, some Android data savers). The
+  // stream is fine; it just needs a gesture, so offer one.
+  const [needsTap, setNeedsTap] = useState(false);
 
   // The stream rides the portal host; fall back to the current host for dev
   // builds without VITE_PORTAL_HOST (the watch view already lives there).
@@ -57,8 +86,17 @@ export function Watch({ resourceId }: { resourceId: string }) {
     let ws: WebSocket | null = null;
     let mediaSource: MediaSource | null = null;
     let sourceBuffer: SourceBuffer | null = null;
+    // Non-null means the blob: attachment path was used, which is also what
+    // teardown keys off; the managed path uses srcObject instead.
     let objectUrl: string | null = null;
     const queue: ArrayBuffer[] = [];
+    // ManagedMediaSource's buffering hint, and whether anything has been fed in
+    // yet. Both only matter on the managed path; on the plain MediaSource path
+    // `streaming` stays true forever and the gate in drain() is inert.
+    let streaming = true;
+    let appendedAny = false;
+
+    setNeedsTap(false);
 
     const fail = (msg: string) => {
       if (disposed) return;
@@ -66,14 +104,40 @@ export function Watch({ resourceId }: { resourceId: string }) {
       setMessage(msg);
     };
 
+    // Without this the element can reject the stream (unsupported bitstream,
+    // decoder failure) while the UI still reads "Live" over a black frame,
+    // because appendBuffer errors are swallowed below. On a phone we cannot
+    // open a console, so the element has to tell us itself.
+    const onVideoError = () => {
+      const code = video.error?.code;
+      fail(
+        code === MediaError.MEDIA_ERR_DECODE
+          ? "The camera's video could not be decoded on this device."
+          : "Video playback failed.",
+      );
+    };
+    video.addEventListener("error", onVideoError);
+
     // SourceBuffer.appendBuffer throws while an append is in flight, so every
     // segment goes through this queue and is drained on updateend.
     const drain = () => {
       if (disposed || !sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
+      // ManagedMediaSource asking us to back off. For a live camera freshness
+      // beats completeness, so collapse the backlog to the newest fragment
+      // instead of appending: every fragment starts with a keyframe
+      // (-movflags +frag_keyframe), so dropping whole fragments resyncs
+      // cleanly. Deliberately NOT applied before the first successful append --
+      // the init segment must always get in, or a UA that reports
+      // streaming === false up front would deadlock the stream forever.
+      if (!streaming && appendedAny) {
+        if (queue.length > 1) queue.splice(0, queue.length - 1);
+        return;
+      }
       const chunk = queue.shift();
       if (!chunk) return;
       try {
         sourceBuffer.appendBuffer(new Uint8Array(chunk));
+        appendedAny = true;
       } catch {
         // QuotaExceeded on a wedged tab: drop what we are holding and let the
         // next keyframe fragment resync rather than tearing the stream down.
@@ -96,15 +160,64 @@ export function Watch({ resourceId }: { resourceId: string }) {
       }
     };
 
+    // Autoplay is best-effort: the attributes normally carry it, but iOS Low
+    // Power Mode refuses even muted video, and by this point we are several
+    // awaits past the user's gesture, so there is no gesture to borrow.
+    const tryPlay = () => {
+      void video.play().catch((e: unknown) => {
+        if (disposed) return;
+        if (e instanceof DOMException && e.name === "NotAllowedError") {
+          setNeedsTap(true);
+          setMessage("Tap Play to start the stream.");
+        } else {
+          setMessage("Playback could not start.");
+        }
+      });
+    };
+
     const startPlayback = (codec: string) => {
       const mime = `video/mp4; codecs="${codec}"`;
-      if (!("MediaSource" in window) || !MediaSource.isTypeSupported(mime)) {
+      if (!MSE_CTOR) {
+        fail("This browser cannot play live video. Use Safari 17.1+ or Chrome.");
+        return;
+      }
+      // Ask the constructor we are actually going to use:
+      // ManagedMediaSource.isTypeSupported reflects the hardware decoder and is
+      // legitimately stricter than MediaSource's.
+      if (!MSE_CTOR.isTypeSupported(mime)) {
         fail("This browser cannot play the camera's video format.");
         return;
       }
-      mediaSource = new MediaSource();
-      objectUrl = URL.createObjectURL(mediaSource);
-      video.src = objectUrl;
+      const managed = MSE_CTOR === MANAGED_MSE;
+      mediaSource = new MSE_CTOR();
+
+      // WebKit refuses a ManagedMediaSource on an element that could still hand
+      // off to AirPlay, so this must be set before attaching. Harmless
+      // elsewhere: this is a live camera, never a cast target.
+      video.disableRemotePlayback = true;
+
+      if (managed) {
+        streaming = (mediaSource as ManagedMediaSource).streaming ?? true;
+        mediaSource.addEventListener("startstreaming", () => {
+          streaming = true;
+          drain();
+        });
+        mediaSource.addEventListener("endstreaming", () => {
+          streaming = false;
+        });
+        // srcObject is the documented attachment for ManagedMediaSource; a
+        // blob: URL is not reliably accepted for it.
+        try {
+          video.srcObject = mediaSource;
+        } catch {
+          objectUrl = URL.createObjectURL(mediaSource);
+          video.src = objectUrl;
+        }
+      } else {
+        objectUrl = URL.createObjectURL(mediaSource);
+        video.src = objectUrl;
+      }
+
       mediaSource.addEventListener("sourceopen", () => {
         if (disposed || !mediaSource) return;
         try {
@@ -121,6 +234,7 @@ export function Watch({ resourceId }: { resourceId: string }) {
         setState("playing");
         setMessage(null);
         drain();
+        tryPlay();
       });
     };
 
@@ -176,9 +290,18 @@ export function Watch({ resourceId }: { resourceId: string }) {
         ws.close();
       }
       queue.length = 0;
-      video.removeAttribute("src");
+      video.removeEventListener("error", onVideoError);
+      video.pause();
+      // Detach whichever way we attached, or the next connect inherits a dead
+      // source (and on the managed path leaks the old one).
+      if (objectUrl) {
+        video.removeAttribute("src");
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      } else {
+        video.srcObject = null;
+      }
       video.load();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [resource, resourceId, streamHost, credentials, attempt]);
 
@@ -200,6 +323,18 @@ export function Watch({ resourceId }: { resourceId: string }) {
           {state === "playing" && "Live"}
           {state === "error" && (message ?? "Error")}
         </span>
+        {needsTap && (
+          <button
+            className="link"
+            onClick={() => {
+              setNeedsTap(false);
+              setMessage(null);
+              void videoRef.current?.play();
+            }}
+          >
+            Play
+          </button>
+        )}
         {!needsCredentials && (state === "error" || state === "idle") && (
           <button className="link" onClick={() => setAttempt((a) => a + 1)}>
             Reconnect
