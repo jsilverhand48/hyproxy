@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from hyproxy.policy import pathglob
+
 
 class Page[T](BaseModel):
     """Keyset-paginated envelope. `next_cursor` is the id to pass as `cursor`
@@ -100,6 +102,42 @@ GUAC_PROTOCOLS = {"vnc", "rdp", "ssh"}
 TUNNEL_PROTOCOLS = GUAC_PROTOCOLS | {"rtsp"}
 
 
+def _normalize_public_paths(v: Any) -> Any:
+    """Validate the public path allowlist at save time.
+
+    pathglob rejects the shapes that would defeat the allowlist (a bare /* or
+    /**, '..' segments, relative patterns), so a stored pattern is always safe
+    to compile and match on the request path.
+    """
+    if v is None:
+        return None
+    if not isinstance(v, list):
+        raise ValueError("public_paths must be a list of path patterns")
+    try:
+        return pathglob.validate_patterns([str(p) for p in v])
+    except pathglob.PatternError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _check_public_shape(
+    *, public_access: bool, protocol: str | None, public_host: str | None,
+    public_paths: list[str] | None,
+) -> None:
+    """Public mode is only coherent for an L7 resource with a host and paths.
+
+    Mirrors the resources_public_access_shape_check DB constraint so the API
+    returns a 422 explaining the problem instead of a raw integrity error.
+    """
+    if not public_access:
+        return
+    if protocol is not None and protocol not in {"http", "https"}:
+        raise ValueError("public access is only available for http/https resources")
+    if not public_host:
+        raise ValueError("a public resource needs a public_host to be reached on")
+    if not public_paths:
+        raise ValueError("a public resource needs at least one public path pattern")
+
+
 class ResourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     protocol: Literal["http", "https", "tcp", "vnc", "rdp", "ssh", "rtsp"]
@@ -109,10 +147,15 @@ class ResourceCreate(BaseModel):
     path_prefix: str | None = None
     description: str | None = None
     enabled: bool = True
+    # Password-only public access. The password itself is never an input: it is
+    # generated server-side and returned once (see ResourceCreateOut).
+    public_access: bool = False
+    public_paths: list[str] | None = None
     # Required for vnc/rdp/ssh/rtsp, forbidden otherwise.
     connection: ResourceConnectionIn | None = None
 
     _norm_public_host = field_validator("public_host", mode="before")(_normalize_public_host)
+    _norm_public_paths = field_validator("public_paths", mode="before")(_normalize_public_paths)
 
     @model_validator(mode="after")
     def _check_protocol_shape(self) -> "ResourceCreate":
@@ -129,6 +172,12 @@ class ResourceCreate(BaseModel):
                 raise ValueError("rtsp credentials are supplied per session and are not stored")
         elif self.connection is not None:
             raise ValueError("connection is only valid for vnc/rdp/ssh/rtsp resources")
+        _check_public_shape(
+            public_access=self.public_access,
+            protocol=self.protocol,
+            public_host=self.public_host,
+            public_paths=self.public_paths,
+        )
         return self
 
 
@@ -140,8 +189,15 @@ class ResourcePatch(BaseModel):
     path_prefix: str | None = None
     description: str | None = None
     enabled: bool | None = None
+    public_access: bool | None = None
+    public_paths: list[str] | None = None
 
     _norm_public_host = field_validator("public_host", mode="before")(_normalize_public_host)
+    _norm_public_paths = field_validator("public_paths", mode="before")(_normalize_public_paths)
+
+    # Cross-field coherence needs the stored row too (a PATCH may set only one
+    # of the three), so the full check lives in the route handler; see
+    # _validate_public_shape in admin/routes/resources.py.
 
 
 class ResourceOut(BaseModel):
@@ -154,8 +210,34 @@ class ResourceOut(BaseModel):
     path_prefix: str | None
     description: str | None
     enabled: bool
+    public_access: bool
+    public_paths: list[str] | None
+    # Whether a share password has been generated. Read off the stored hash via
+    # an alias so the hash itself is never a field on this model and cannot be
+    # serialized by accident; the password is shown exactly once, at generation.
+    public_password_set: bool = Field(
+        default=False, validation_alias="public_password_hash"
+    )
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+    @field_validator("public_password_set", mode="before")
+    @classmethod
+    def _derive_password_set(cls, v: Any) -> bool:
+        return bool(v)
+
+
+class ResourceCreateOut(ResourceOut):
+    """Create response. Carries the generated share password ONCE, when the
+    resource was created public; it can never be read back afterwards."""
+
+    public_password: str | None = None
+
+
+class PublicPasswordOut(BaseModel):
+    """Rotation response: the new share password, shown once."""
+
+    password: str
 
 
 class PolicyCreate(BaseModel):

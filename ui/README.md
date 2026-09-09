@@ -51,6 +51,14 @@ handling). This keeps the bundle small and the CSP strict.
   `Account`, `Connect`, `Watch` (portal).
 - `src/components/`: `ResourceDialog`, `ConfirmDialog`, `ErrorBoundary`,
   shared primitives in `ui.tsx`.
+
+  `ResourceDialog` also drives **public (password-gated) access** for http/https
+  resources: a checkbox plus a one-glob-per-line path list. The admin never
+  types that password -- it is generated server-side and returned exactly once,
+  on create or via "Regenerate password", so the dialog renders it immediately
+  and stays open rather than losing it. Regenerating signs out everyone using
+  the link, so it is behind a `ConfirmDialog`. `Resources.tsx` shows the mode in
+  an "Access" column and flags a public resource that has no password yet.
 - `src/lib/`: `config.ts` (all `VITE_*` runtime config), `auth.ts`,
   `dpop.ts`, `pkce.ts`, `api.ts`, `guac.ts`, `rtsp.ts`, `useApi.ts`,
   `logger.ts`, `types.ts`.

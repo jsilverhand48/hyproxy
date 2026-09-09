@@ -76,11 +76,34 @@ class UserRole(Base):
 
 
 class Resource(Base):
+    """A routable target.
+
+    The `public_*` columns describe the password-gated public mode: the resource
+    is served to anyone on the internet who can supply one shared password, with
+    no IdP login, no user account, and no Policy evaluation. It is deliberately
+    restricted to http/https resources that carry a routing host, and the paths
+    it exposes are an explicit allowlist of glob patterns (`public_paths`) --
+    anything outside them 404s, so the rest of the hostname stays unenumerable.
+    See authz/publicgate.py for the gate itself and policy/pathglob.py for the
+    pattern language."""
+
     __tablename__ = "resources"
     __table_args__ = (
         CheckConstraint(
             "protocol IN ('http','https','tcp','vnc','rdp','ssh','rtsp')",
             name="resources_protocol_check",
+        ),
+        # Public mode is only coherent for an L7 resource that has a routing
+        # host and a non-empty path allowlist. Enforced here as well as in the
+        # admin schema so no code path can produce a half-configured public
+        # resource that would fail open or expose the whole host.
+        CheckConstraint(
+            "NOT public_access OR ("
+            "protocol IN ('http','https')"
+            " AND public_host IS NOT NULL"
+            " AND public_paths IS NOT NULL"
+            " AND array_length(public_paths, 1) >= 1)",
+            name="resources_public_access_shape_check",
         ),
     )
 
@@ -94,6 +117,14 @@ class Resource(Base):
     path_prefix: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    # Password-only public access: no SSO, no roles, no policy.
+    public_access: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    # Glob patterns (policy/pathglob.py) naming every path reachable publicly.
+    public_paths: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # argon2id hash of the generated share password. The password itself is
+    # shown to the admin exactly once, at generation, and never persisted.
+    public_password_hash: Mapped[str | None] = mapped_column(Text)
+    public_password_set_at: Mapped[datetime | None]
 
 
 class ResourceConnection(Base):
@@ -515,6 +546,30 @@ class GatewayLoginState(Base):
     source_ip: Mapped[str] = mapped_column(INET)
     created_at: Mapped[datetime] = mapped_column(server_default=NOW)
     expires_at: Mapped[datetime]
+
+
+class PublicSession(Base):
+    """Browser session behind a password-gated public resource.
+
+    The anonymous counterpart to GatewaySession: no user, no IdP session, and
+    scoped to exactly one resource. The cookie carries "{id}.{secret}" and only
+    sha256(secret) is stored, so a database read never yields a usable cookie.
+    `resource_id` is checked on every resolve, so a cookie minted for one public
+    resource can never be replayed against another."""
+
+    __tablename__ = "public_sessions"
+    __table_args__ = (Index("ix_public_sessions_resource_id", "resource_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=GEN_UUID)
+    resource_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"))
+    cookie_secret_hash: Mapped[str] = mapped_column(Text)
+    # Null when public_session_bind_ip is off; otherwise the address the
+    # password was accepted from, re-checked on every request.
+    source_ip: Mapped[str | None] = mapped_column(INET)
+    created_at: Mapped[datetime] = mapped_column(server_default=NOW)
+    expires_at: Mapped[datetime]
+    last_seen_at: Mapped[datetime] = mapped_column(server_default=NOW)
+    revoked_at: Mapped[datetime | None]
 
 
 class AuthThrottle(Base):

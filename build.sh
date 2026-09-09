@@ -156,6 +156,7 @@ render_dp_config() {
   "auth_host": "auth.$HYPROXY_DOMAIN",
   "auth_backend": "$authz_backend",
   "gateway_cookie_name": "__Secure-gw",
+  "public_cookie_name": "__Host-hypublic",
   "guac_backend": "$guac_backend",
   "rtsp_backend": "$rtsp_backend",
   "routes_refresh_secs": $routes_refresh,

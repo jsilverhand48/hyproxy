@@ -329,7 +329,7 @@ Everything an operator can change, from most to least commonly touched:
    access policies live in Postgres and are managed over the admin API. The
    data plane polls `/authz/routes` (default every 10s) and hot-swaps its
    route table, so adding an application requires no config file edits and no
-   restarts.
+   restarts. An http/https resource can also be marked **public**: see below.
 3. **`dataplane/config.json`.** Rendered from `.env` by `build.sh`/
    `install.sh` but hand-editable; holds the static infra config the DB cannot
    (listen address, TLS paths, the auth/idp/admin routes, bot filter, LAN
@@ -342,6 +342,39 @@ Everything an operator can change, from most to least commonly touched:
    files on change, no restarts.
 6. **Systemd units**: written only if absent, so local edits persist across
    re-installs.
+
+### Public (password-gated) resources
+
+Normally every resource sits behind full SSO. An http/https resource can instead
+be marked **public** in the admin console, which serves it to anyone on the
+internet who has one shared password: no sign-in, no account, no role, no
+policy. Use it for a link you want to hand to someone who will never have an
+account here.
+
+Ticking the box requires a list of path globs, one per line, and only those
+paths exist:
+
+    resource1.example.com/my/uri/path/*  ->  10.10.1.5:9000/my/uri/path/...
+
+`*` matches within one path segment, `**` matches any depth. The path is passed
+to the backend unchanged. Every other path on that hostname returns 404, so a
+public link is never a way to explore the rest of the backend; a bare `/*` or
+`/**` is rejected for that reason.
+
+The password is generated for you and **shown exactly once**, when you create
+the resource or press "Regenerate password". It is stored only as an argon2id
+hash and cannot be shown again. Regenerating also signs out everyone currently
+using the link, so it doubles as the revoke button; so do turning public mode
+off, editing the path list, and disabling the resource.
+
+Visitors get a password prompt served on the resource's own hostname. A correct
+password sets a cookie scoped to that one hostname (`__Host-` prefixed, so the
+browser will not send it to any other subdomain) which lasts
+`HYPROXY_PUBLIC_SESSION_TTL` (12h by default) and is bound to the address that
+entered the password unless you turn `HYPROXY_PUBLIC_SESSION_BIND_IP` off.
+Attempts are rate-limited per source IP and per resource by the same throttle
+that guards IdP logins, the bot filter still applies, every access is written to
+the Access audit log, and the backend receives no identity headers at all.
 
 ### Environment (.env) parameters
 
@@ -380,6 +413,10 @@ Optional, with defaults (all read by the control plane unless noted):
 | `HYPROXY_GATEWAY_COOKIE_DOMAIN` | empty | Empty = host-only cookie; set a parent domain to share across subdomains (also widens the IdP CSP `form-action`) |
 | `HYPROXY_GATEWAY_STATE_TTL` | `600` | Gateway login state lifetime |
 | `HYPROXY_GATEWAY_CLIENT_ID` | `gateway` | OIDC client id of the data plane gateway |
+| `HYPROXY_PUBLIC_COOKIE_NAME` | `__Host-hypublic` | Access cookie for public resources. The `__Host-` prefix forbids a `Domain`, pinning it to the issuing hostname; keep the prefix and keep it identical to the data plane's `public_cookie_name` |
+| `HYPROXY_PUBLIC_SESSION_TTL` | `43200` | How long a correct public-resource password buys access (12h) |
+| `HYPROXY_PUBLIC_SESSION_BIND_IP` | `true` | Bind a public session to the address that entered the password. Tight default; mobile egress churn may re-prompt, set false to rest on the cookie secret and TTL alone |
+| `HYPROXY_PUBLIC_GATE_CSRF_TTL` | `900` | Lifetime of the public gate form's one-shot CSRF cookie |
 | `HYPROXY_IDP_INTERNAL_URL` | empty | authz -> IdP backchannel base; defaults to the issuer |
 | `HYPROXY_IDP_VERIFY_TLS` | `true` | TLS verification on the backchannel; keep true in production |
 | `HYPROXY_TRUST_FORWARDED_FOR` | `false` | Take client IP from the leftmost `X-Forwarded-For`; must be consistent across all services or IP-bound sessions break |

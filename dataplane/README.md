@@ -89,6 +89,27 @@ hot-swaps its route table, so an admin adding a resource makes the route live
 with no restart. Static routes win on host conflict; a failed poll keeps the
 last-good table; one bad row is skipped and logged, never fatal.
 
+DB routes may also carry `public_gate`, set for a password-gated public
+resource. It cannot be set from static config and the control plane never emits
+an `auth` field for a DB route, so a resource-derived route is always either
+fully authenticated or password-gated -- never open.
+
+### Public (password-gated) resources
+
+`serveApp` reserves the `/__hyproxy/` path prefix on a `public_gate` route and
+proxies it to the control plane (`auth_backend`) instead of the backend. The
+branch sits deliberately **before** the `AuthRequired()` check, because that
+password gate *is* the route's authentication, and it leaves the request's own
+cookies intact (the access cookie and the form's CSRF cookie) since the control
+plane is the only thing behind that path. The prefix test is strict, so it can
+never be used to reach `/authz/check` or `/guac/consume` on that service.
+
+Everything outside the prefix goes through the normal `/authz/check` call, with
+the access cookie extracted and stripped exactly like the gateway cookie. The
+control plane answers `not_found` for any path outside the resource's allowlist,
+which becomes a bare 404 here so a public link never reveals what else the
+backend serves. Bot filtering still applies: public hosts are not exempt.
+
 ### Grant-authorized WebSockets
 
 Two route flags carve a fixed WebSocket path out of a normal host (the portal)
@@ -156,6 +177,7 @@ rejection; validation errors abort startup.
 | `auth_host` | | Public hostname for the gateway endpoints |
 | `auth_backend` | | Backend serving `/gateway/*` for the auth host (the authz service) |
 | `gateway_cookie_name` | `__Secure-gw` | Cookie extracted for authz and stripped upstream |
+| `public_cookie_name` | `__Host-hypublic` | Access cookie for password-gated public resources; extracted for authz and stripped upstream. Must match the control plane's `public_cookie_name` |
 | `guac_backend` | empty | Tunnel origin for DB vnc/rdp/ssh resources; empty disables guac routes |
 | `rtsp_backend` | empty | RTSP bridge origin (`http://127.0.0.1:8700`); required by `rtsp_tunnel_path`, empty disables rtsp streams |
 | `routes_refresh_secs` | `10` | DB route poll interval |

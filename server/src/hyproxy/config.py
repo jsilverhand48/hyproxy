@@ -73,6 +73,27 @@ class Settings(BaseSettings):
     gateway_cookie_name: str = "__Secure-gw"
     gateway_cookie_domain: str = ""  # empty = host-only; prod: parent domain
     gateway_state_ttl: int = 600
+
+    # Public (password-gated) resources. A public resource is served to anyone
+    # on the internet who supplies its shared password: no IdP login, no user,
+    # no Policy evaluation. See authz/publicgate.py.
+    #
+    # The cookie is __Host- prefixed on purpose: that prefix forbids a Domain
+    # attribute, so the browser scopes it to the single resource hostname that
+    # issued it and it is never sent to any other subdomain. Unlike
+    # gateway_cookie_domain, this must NOT be widened.
+    public_cookie_name: str = "__Host-hypublic"
+    # How long a correct password buys access, in seconds (default 12h).
+    public_session_ttl: int = 43200
+    # Bind each public session to the address that entered the password. This
+    # is the tight setting and the default. The tradeoff is the one already
+    # documented on resolve_gateway_session: a phone's egress address is not
+    # stable (CGNAT pools, Wi-Fi<->cellular handoff, iCloud Private Relay), so a
+    # link shared to mobile users may re-prompt mid-visit. Turning it off leaves
+    # the flow resting on the cookie secret and public_session_ttl alone.
+    public_session_bind_ip: bool = True
+    # TTL of the one-shot CSRF cookie backing the gate form, in seconds.
+    public_gate_csrf_ttl: int = 900
     # Backchannel from the authz service to the IdP token endpoint. Defaults to
     # the issuer; override when the internal address differs. verify=False only
     # for dev self-signed certs.

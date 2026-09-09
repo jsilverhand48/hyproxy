@@ -1,5 +1,6 @@
 // Add/edit resource modal. The type dropdown drives which fields are shown:
-// - http/https: public host (route) + backend host/ports
+// - http/https: public host (route) + backend host/ports, and optionally the
+//   password-only public mode (see below)
 // - tcp: backend host/ports only (no route is emitted for tcp)
 // - vnc/rdp/ssh: the guacd target (hostname/port), username/password and extra
 //   guacd params; no public host, sessions ride the portal host's fixed
@@ -12,13 +13,24 @@
 // PUTs the connection.
 // Secrets are sealed server-side and never read back: leaving the password
 // blank keeps the existing value, "clear" sends an empty dict.
+//
+// Public mode (http/https only) makes the resource reachable by anyone on the
+// internet who has its password, with no sign-in and no policy. The admin never
+// types that password: it is generated server-side and returned exactly once,
+// on create or on rotate, so it is rendered here immediately and cannot be
+// fetched again. Only the path globs listed exist; everything else 404s.
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import type { Resource, ResourceConnection } from "../lib/types";
+import type {
+  PublicPassword,
+  Resource,
+  ResourceConnection,
+  ResourceCreated,
+} from "../lib/types";
 import { runMutation } from "../lib/useApi";
 import { Banner } from "./ui";
-import { Modal } from "./ConfirmDialog";
+import { ConfirmDialog, Modal } from "./ConfirmDialog";
 
 const PROTOCOLS = ["http", "https", "tcp", "vnc", "rdp", "ssh", "rtsp"];
 const GUAC_PROTOCOLS = new Set(["vnc", "rdp", "ssh"]);
@@ -49,6 +61,19 @@ function textToParams(text: string): Record<string, string> {
   return params;
 }
 
+// One glob per line. `*` matches within a path segment, `**` across segments;
+// the server rejects a bare /* or /** since that would expose the whole host.
+function pathsToText(paths: string[] | null): string {
+  return (paths ?? []).join("\n");
+}
+
+function textToPaths(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function parsePorts(text: string): number[] {
   return text
     .split(",")
@@ -73,7 +98,13 @@ export function ResourceDialog({
   const [host, setHost] = useState(resource?.host ?? "");
   const [ports, setPorts] = useState(resource?.ports.join(", ") ?? "");
   const [description, setDescription] = useState(resource?.description ?? "");
+  const [publicAccess, setPublicAccess] = useState(resource?.public_access ?? false);
+  const [publicPaths, setPublicPaths] = useState(pathsToText(resource?.public_paths ?? null));
+  // Shown once, right after the server generates it. Never re-fetchable.
+  const [issuedPassword, setIssuedPassword] = useState<string | null>(null);
+  const [confirmRotate, setConfirmRotate] = useState(false);
   const isRtsp = protocol === "rtsp";
+  const isHttp = protocol === "http" || protocol === "https";
   const isTunnel = TUNNEL_PROTOCOLS.has(protocol);
 
   // Connection fields (vnc/rdp/ssh/rtsp only). For guac the username lives in
@@ -151,6 +182,22 @@ export function ResourceDialog({
     return params;
   }
 
+  // Rotating is also the revoke button: the server kills every live session on
+  // the link, so anyone holding the old password is locked out immediately.
+  async function rotatePassword() {
+    if (!editing) return;
+    const err = await runMutation(async () => {
+      const out = await api.post<PublicPassword>(
+        `/resources/${resource.id}/public-password`,
+        {},
+      );
+      setIssuedPassword(out.password);
+      return out;
+    });
+    setMsg(err);
+    if (err === null) onSaved();
+  }
+
   async function save() {
     const desc = description.trim() || null;
     if (!editing) {
@@ -171,12 +218,26 @@ export function ResourceDialog({
         body.host = host.trim();
         body.ports = parsePorts(ports);
         body.public_host = protocol === "tcp" ? null : publicHost.trim() || null;
+        if (isHttp && publicAccess) {
+          body.public_access = true;
+          body.public_paths = textToPaths(publicPaths);
+        }
       }
-      const err = await runMutation(() => api.post<Resource>("/resources", body));
+      // runMutation only surfaces the error, so the response is captured in the
+      // closure (same shape as rotatePassword below).
+      const issued = { password: null as string | null };
+      const err = await runMutation(async () => {
+        const created = await api.post<ResourceCreated>("/resources", body);
+        issued.password = created.public_password;
+        return created;
+      });
       setMsg(err);
       if (err === null) {
         onSaved();
-        onClose();
+        // Keep the modal open when there is a generated password to show: it is
+        // returned once and closing would lose it for good.
+        if (issued.password) setIssuedPassword(issued.password);
+        else onClose();
       }
       return;
     }
@@ -186,6 +247,11 @@ export function ResourceDialog({
       patch.host = host.trim();
       patch.ports = parsePorts(ports);
       if (protocol !== "tcp") patch.public_host = publicHost.trim() || null;
+      if (isHttp) {
+        patch.public_access = publicAccess;
+        // Editing the exposed paths revokes every live session server-side.
+        if (publicAccess) patch.public_paths = textToPaths(publicPaths);
+      }
     }
     const patchErr = await runMutation(() => api.patch<Resource>(`/resources/${resource.id}`, patch));
     if (patchErr !== null) {
@@ -213,6 +279,12 @@ export function ResourceDialog({
       }
     }
     onSaved();
+    // A resource just turned public has no password yet; say so rather than
+    // silently leaving a link nobody can open.
+    if (isHttp && publicAccess && !resource.public_password_set && !issuedPassword) {
+      setMsg("Public access is on, but no password exists yet. Generate one below.");
+      return;
+    }
     onClose();
   }
 
@@ -349,6 +421,43 @@ export function ResourceDialog({
                 onChange={(e) => setPorts(e.target.value)}
                 required
               />
+              {isHttp && (
+                <>
+                  <label className="muted">
+                    <input
+                      type="checkbox"
+                      checked={publicAccess}
+                      onChange={(e) => setPublicAccess(e.target.checked)}
+                    />{" "}
+                    public &mdash; password only, no sign-in
+                  </label>
+                  {publicAccess && (
+                    <>
+                      <textarea
+                        placeholder={
+                          "public paths, one per line\ne.g. /my/uri/path/*\n" +
+                          "* matches one segment, ** matches any depth"
+                        }
+                        rows={3}
+                        value={publicPaths}
+                        onChange={(e) => setPublicPaths(e.target.value)}
+                        required
+                      />
+                      <p className="muted">
+                        Anyone with the password reaches these paths. Everything else on{" "}
+                        {publicHost.trim() || "this host"} returns 404.
+                      </p>
+                      {editing && (
+                        <button type="button" onClick={() => setConfirmRotate(true)}>
+                          {resource.public_password_set
+                            ? "Regenerate password"
+                            : "Generate password"}
+                        </button>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
             </>
           )}
           <input
@@ -356,13 +465,45 @@ export function ResourceDialog({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
+          {issuedPassword && (
+            <div className="stack" style={{ border: "1px solid", padding: "0.75rem" }}>
+              <strong>Share password (shown once)</strong>
+              <code style={{ fontSize: "1.15rem", userSelect: "all" }}>{issuedPassword}</code>
+              {publicHost.trim() && textToPaths(publicPaths).length > 0 && (
+                <code style={{ userSelect: "all", overflowWrap: "anywhere" }}>
+                  {`https://${publicHost.trim()}${
+                    textToPaths(publicPaths)[0].split("*")[0] || "/"
+                  }`}
+                </code>
+              )}
+              <p className="muted">
+                Copy this now. It is not stored in readable form and cannot be shown again;
+                the only way to recover access is to generate a new one.
+              </p>
+            </div>
+          )}
           <div className="modal-actions">
             <button type="button" onClick={onClose}>
-              Cancel
+              {issuedPassword ? "Done" : "Cancel"}
             </button>
             <button type="submit">{editing ? "Save" : "Add"}</button>
           </div>
         </form>
+      )}
+      {confirmRotate && (
+        <ConfirmDialog
+          title="Generate a new password?"
+          message={
+            "Everyone currently using this link is signed out immediately, and the old " +
+            "password stops working. The new one is shown once."
+          }
+          confirmLabel="Generate"
+          onConfirm={() => {
+            setConfirmRotate(false);
+            void rotatePassword();
+          }}
+          onCancel={() => setConfirmRotate(false)}
+        />
       )}
     </Modal>
   );

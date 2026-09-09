@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from hyproxy.authz.check import router as check_router
 from hyproxy.authz.gateway import router as gateway_router
 from hyproxy.authz.guac import router as guac_router
+from hyproxy.authz.publicgate import router as publicgate_router
 from hyproxy.authz.routes import router as routes_router
 from hyproxy.authz.rtsp import router as rtsp_router
 from hyproxy.config import get_settings
@@ -45,6 +46,10 @@ def create_app(idp_http: httpx.AsyncClient | None = None) -> FastAPI:
     app.include_router(routes_router)
     app.include_router(gateway_router)
     app.include_router(guac_router)
+    # Password gate for public resources. Browser-facing, but served on each
+    # resource's own hostname (the data plane routes /__hyproxy/* here), not on
+    # the auth host -- serveAuthHost's allowlist deliberately excludes it.
+    app.include_router(publicgate_router)
     app.include_router(rtsp_router)
 
     # The guac connect and rtsp watch views run on the SPA origins and must

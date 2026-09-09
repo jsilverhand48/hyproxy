@@ -28,6 +28,25 @@ export interface Resource {
   path_prefix: string | null;
   description: string | null;
   enabled: boolean;
+  // Password-only public access: served to anyone on the internet who has the
+  // generated password, with no sign-in and no policy. Only the path globs in
+  // public_paths exist; everything else on the host 404s.
+  public_access: boolean;
+  public_paths: string[] | null;
+  // Whether a share password has been generated. The password itself is shown
+  // exactly once, in the create/rotate response, and is never readable after.
+  public_password_set: boolean;
+}
+
+// Create response: carries the generated share password once, when the
+// resource was created public.
+export interface ResourceCreated extends Resource {
+  public_password: string | null;
+}
+
+// Rotate response for POST /resources/{id}/public-password.
+export interface PublicPassword {
+  password: string;
 }
 
 export interface ResourceConnection {

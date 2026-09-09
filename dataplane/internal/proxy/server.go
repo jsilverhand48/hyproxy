@@ -49,11 +49,12 @@ type routeSet struct {
 }
 
 type Server struct {
-	authz      AuthzChecker
-	cookieName string
-	authProxy  *httputil.ReverseProxy
-	routes     atomic.Pointer[routeSet]
-	log        *slog.Logger
+	authz            AuthzChecker
+	cookieName       string
+	publicCookieName string
+	authProxy        *httputil.ReverseProxy
+	routes           atomic.Pointer[routeSet]
+	log              *slog.Logger
 
 	// Host-scope allow decisions cached per control-plane hint; purged
 	// whenever the route table actually changes.
@@ -117,18 +118,19 @@ func NewServer(cfg *config.Config, checker AuthzChecker, log *slog.Logger) (*Ser
 		log.Info("bot filter enabled", "self_ips", strings.Join(bf.SelfIPs(), ","))
 	}
 	s := &Server{
-		authz:           checker,
-		cookieName:      cfg.GatewayCookieName,
-		authProxy:       newReverseProxy(authBackend, log, transport),
-		log:             log,
-		authzCache:      newAuthzCache(),
-		authHost:        cfg.AuthHost,
-		staticRoutes:    cfg.Routes,
-		guacBackend:     cfg.GuacBackend,
-		lanNets:         lanNets,
-		lanOnlyRedirect: cfg.LanOnlyRedirect,
-		transport:       transport,
-		botFilter:       bf,
+		authz:            checker,
+		cookieName:       cfg.GatewayCookieName,
+		publicCookieName: cfg.PublicCookieName,
+		authProxy:        newReverseProxy(authBackend, log, transport),
+		log:              log,
+		authzCache:       newAuthzCache(),
+		authHost:         cfg.AuthHost,
+		staticRoutes:     cfg.Routes,
+		guacBackend:      cfg.GuacBackend,
+		lanNets:          lanNets,
+		lanOnlyRedirect:  cfg.LanOnlyRedirect,
+		transport:        transport,
+		botFilter:        bf,
 	}
 	if cfg.GuacBackend != "" {
 		u, err := url.Parse(cfg.GuacBackend)
@@ -325,11 +327,27 @@ func stripIdentityHeaders(h http.Header) {
 // gatewayCookie returns the gateway session cookie value and removes it from
 // the outgoing Cookie header (backends never see gateway credentials).
 func (s *Server) gatewayCookie(r *http.Request) string {
+	return extractCookie(r, s.cookieName)
+}
+
+// publicCookie pulls the password-gate access cookie for a public resource.
+// Same contract as gatewayCookie: the control plane needs it to resolve the
+// session, and the backend must never see it.
+func (s *Server) publicCookie(r *http.Request) string {
+	return extractCookie(r, s.publicCookieName)
+}
+
+// extractCookie returns the named cookie's value and removes it from the
+// request, so an authorization cookie is never forwarded to a backend.
+func extractCookie(r *http.Request, name string) string {
+	if name == "" {
+		return ""
+	}
 	cookies := r.Cookies()
 	var value string
 	kept := make([]string, 0, len(cookies))
 	for _, c := range cookies {
-		if c.Name == s.cookieName {
+		if c.Name == name {
 			value = c.Value
 			continue
 		}
@@ -418,6 +436,19 @@ func (s *Server) serveApp(
 	upstream := rs.proxies[host]
 	cookie := s.gatewayCookie(r) // always strip the gateway cookie from upstream
 
+	// Password gate for a public resource. Reserved path space on the
+	// resource's own hostname, proxied to the control plane instead of the
+	// backend, and deliberately ahead of the AuthRequired() check below: the
+	// gate IS this route's authentication, so it must be reachable without one.
+	// Its own cookies (the access cookie and the form's CSRF cookie) are left
+	// on the request; the control plane is the only thing behind this path.
+	if route.PublicGate && isPublicGatePath(r.URL.Path) {
+		s.authProxy.ServeHTTP(w, r)
+		return
+	}
+	// Strip the access cookie before anything can forward it upstream.
+	publicCookie := s.publicCookie(r)
+
 	if route.GuacTunnel {
 		s.serveGuacTunnel(w, r, upstream, cookie)
 		return
@@ -468,6 +499,7 @@ func (s *Server) serveApp(
 		SourceIP:      srcIP,
 		BackendPort:   route.BackendPort,
 		GatewayCookie: cookie,
+		PublicCookie:  publicCookie,
 	})
 	if err != nil {
 		// Fail closed: no decision, no proxying.
@@ -492,9 +524,26 @@ func (s *Server) serveApp(
 			return
 		}
 		http.Error(w, "authentication required", http.StatusUnauthorized)
+	case "not_found":
+		// A path outside a public resource's allowlist. 404, not 403, so a
+		// public link never confirms what else the backend serves.
+		http.NotFound(w, r)
 	default:
 		http.Error(w, "forbidden", http.StatusForbidden)
 	}
+}
+
+// publicGatePrefix is the reserved path space the password gate for public
+// resources lives under. Must stay in sync with PUBLIC_GATE_PREFIX in
+// server/src/hyproxy/authz/publicgate.py.
+const publicGatePrefix = "/__hyproxy/"
+
+// isPublicGatePath reports whether a path belongs to the password gate. The
+// test is strict: only this prefix is forwarded to the control plane, so the
+// branch can never be used to reach /authz/check, /guac/consume, or any other
+// internal endpoint on that service.
+func isPublicGatePath(path string) bool {
+	return strings.HasPrefix(path, publicGatePrefix)
 }
 
 // serveGuacTunnel authorizes and proxies a Guacamole tunnel WebSocket connect to

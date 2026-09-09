@@ -6,6 +6,7 @@
   "auth_host": "auth.localhost",
   "auth_backend": "http://127.0.0.1:8500",
   "gateway_cookie_name": "__Secure-gw",
+  "public_cookie_name": "__Host-hypublic",
   "guac_backend": "http://127.0.0.1:8600",
   "rtsp_backend": "http://127.0.0.1:8700",
   "routes_refresh_secs": 10,

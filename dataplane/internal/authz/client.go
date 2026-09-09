@@ -39,6 +39,8 @@ type CheckRequest struct {
 	SourceIP      string `json:"source_ip"`
 	BackendPort   int    `json:"backend_port,omitempty"`
 	GatewayCookie string `json:"gateway_cookie,omitempty"`
+	// PublicCookie is the access cookie for a password-gated public resource.
+	PublicCookie string `json:"public_cookie,omitempty"`
 }
 
 type CheckResponse struct {

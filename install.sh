@@ -688,6 +688,7 @@ cat > "$DP_OUT" <<EOF
   "auth_host": "auth.$HYPROXY_DOMAIN",
   "auth_backend": "$AUTHZ_BACKEND",
   "gateway_cookie_name": "__Secure-gw",
+  "public_cookie_name": "__Host-hypublic",
   "guac_backend": "$GUAC_BACKEND",
   "rtsp_backend": "$RTSP_BACKEND",
   "routes_refresh_secs": $ROUTES_REFRESH_SECS,

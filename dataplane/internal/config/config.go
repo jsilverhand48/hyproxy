@@ -38,6 +38,12 @@ type Route struct {
 	// Set on the apps portal route only; rtsp resources carry no public host
 	// of their own, exactly like guac ones.
 	RtspTunnelPath bool `json:"rtsp_tunnel_path,omitempty"`
+	// PublicGate marks a password-gated public resource: the data plane serves
+	// the control plane's /__hyproxy/* password gate on this host instead of
+	// proxying it to the backend. The access decision itself still comes from
+	// /authz/check, which 404s every path outside the resource's allowlist.
+	// Set only from DB routes; static infra routes never need it.
+	PublicGate bool `json:"public_gate,omitempty"`
 	// LanOnly restricts the route to clients whose TCP peer address is inside
 	// the LAN networks (Config.LanCidrs, or the host's own interface subnets
 	// when unset). Blocked browsers are redirected to Config.LanOnlyRedirect.
@@ -61,6 +67,10 @@ type Config struct {
 	AuthBackend string `json:"auth_backend"`
 	// GatewayCookieName is extracted for authz checks and stripped upstream.
 	GatewayCookieName string `json:"gateway_cookie_name"`
+	// PublicCookieName is the access cookie for password-gated public
+	// resources, extracted for authz checks and stripped upstream exactly like
+	// GatewayCookieName. Must match the control plane's public_cookie_name.
+	PublicCookieName string `json:"public_cookie_name"`
 	// Routes are the STATIC infra routes (idp/admin), read once at startup. App
 	// routes are DB-driven and fetched from the control plane at runtime; static
 	// routes win on host conflict. May be empty.
@@ -187,6 +197,9 @@ func (c *Config) Validate() error {
 	}
 	if c.GatewayCookieName == "" {
 		c.GatewayCookieName = "__Secure-gw"
+	}
+	if c.PublicCookieName == "" {
+		c.PublicCookieName = "__Host-hypublic"
 	}
 	if c.RoutesRefreshSecs == 0 {
 		c.RoutesRefreshSecs = DefaultRoutesRefreshSecs

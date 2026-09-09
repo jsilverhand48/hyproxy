@@ -138,7 +138,8 @@ revisions: `make db-revision m="message"` (autogenerate against
   derived from roles, `is_protected` marking the break-glass admin that
   cannot be deleted/disabled/demoted), `Role`, `UserRole`.
 - **Resources and policy:** `Resource` (protocol enum http/https/tcp/vnc/rdp/
-  ssh/rtsp, unique CITEXT `public_host`, `ports` array), `Policy` (role x
+  ssh/rtsp, unique CITEXT `public_host`, `ports` array, plus the `public_*`
+  columns describing password-gated public access - see below), `Policy` (role x
   resource allow/deny with optional port list, path prefixes, and
   `conditions_json` time windows), `ResourceConnection` (guacd parameters, or
   hostname/port/`path` for rtsp; secret parameters sealed, cleartext column
@@ -156,6 +157,13 @@ revisions: `make db-revision m="message"` (autogenerate against
   `completed_session_id`; completed rows are retained on purpose, see IdP),
   `GatewaySession`, `GatewayLoginState`, `GuacGrant` and `RtspGrant` (PK is
   the token hash, IP-bound, single-use).
+- **Public access:** `Resource.public_access` / `public_paths` /
+  `public_password_hash` / `public_password_set_at`, and `PublicSession` (the
+  anonymous counterpart to `GatewaySession`: no user, no IdP session, scoped to
+  one resource, hashed cookie secret, optional source-IP binding, absolute
+  expiry). A CHECK constraint (`resources_public_access_shape_check`) makes
+  public mode impossible unless the resource is http/https, has a
+  `public_host`, and lists at least one path pattern.
 - **Audit:** `AuthEvent`, `AuditLog` (every data plane decision),
   `PolicyChange`, `LogShipCursor` (shipping high-water marks),
   `AuthThrottle` (login rate limiting state).
@@ -470,13 +478,53 @@ endpoints are disabled.
 
 ### /authz/check (`check.py`)
 
-Request: `{host, method, uri, source_ip, backend_port, gateway_cookie}`.
-Resolution order: unknown host -> deny; no live gateway session ->
-`auth_required` with a redirect into `/gateway/start`; inactive user ->
-deny; a standard-tier user on the admin console host -> bounced (tier gate);
-otherwise the policy engine decides. **Every branch writes an `AuditLog` row
-in the same transaction**, which is what the admin "Access audit" viewer
-shows. Allow responses carry the identity headers the data plane injects.
+Request:
+`{host, method, uri, source_ip, backend_port, gateway_cookie, public_cookie}`.
+Resolution order: unknown host -> deny; a **public** resource takes its own
+branch (below); otherwise no live gateway session -> `auth_required` with a
+redirect into `/gateway/start`; inactive user -> deny; a standard-tier user on
+the admin console host -> bounced (tier gate); otherwise the policy engine
+decides. **Every branch writes an `AuditLog` row in the same transaction**,
+which is what the admin "Access audit" viewer shows. Allow responses carry the
+identity headers the data plane injects.
+
+Decisions are `allow`, `deny`, `auth_required`, and `not_found`. The data plane
+maps `not_found` to a bare 404; it exists so a public resource can hide every
+path outside its allowlist without confirming what else the host serves.
+
+### Public (password-gated) resources (`publicgate.py`, `policy/pathglob.py`)
+
+A resource with `public_access` is reachable by anyone on the internet who has
+its generated password. There is no IdP login, no user, no role, and no `Policy`
+evaluation: `_check_public` in `check.py` handles it end to end and deliberately
+does not fall through, so a signed-in admin sees the same prompt as an anonymous
+visitor and no policy row can widen what the link exposes.
+
+- **Exposure** is `Resource.public_paths`, a list of globs compiled by
+  `policy/pathglob.py` (`*` within a segment, `**` across; anchored both ends).
+  Not a regex language, on purpose: admin regexes would run on the request hot
+  path of an internet-facing host. `validate_patterns` rejects a bare `/*` or
+  `/**` at save time. Anything unmatched returns `not_found`.
+- **The gate** is `GET`/`POST /__hyproxy/gate`, served on the *resource's own*
+  hostname (the data plane routes that reserved prefix here instead of to the
+  backend). Staying same-origin is what lets the access cookie carry the
+  `__Host-` prefix, which forbids a `Domain` attribute and so pins the cookie to
+  the single hostname that issued it. The page is fully self-contained: `/static`
+  belongs to the IdP app on the issuer host and is not reachable here.
+  The resource is resolved from `X-Forwarded-Host`, which is trustworthy only
+  because `SetXForwarded()` drops any client value and the data plane reaches
+  this handler only for a host already in its route table; a request without it
+  gets a 404.
+- **Hardening**: attempts run through the same DB-backed throttle as IdP logins
+  (`security/ratelimit.py`, keyed per source IP and per resource, which also
+  bounds argon2 CPU); a resource with no password burns the same argon2 time via
+  `dummy_verify()`; every outcome is audited with a null user; allow responses
+  carry **no identity headers**, so the backend sees a genuinely anonymous
+  request; `cache_scope` is always `none` because the decision is path-dependent.
+  The bot filter is not bypassed.
+- **Revocation**: rotating the password, turning public mode off, editing the
+  path list, or disabling the resource all revoke every live `PublicSession`.
+  Turning public mode off also clears the stored hash.
 
 ### Decision cache hint (`decision.py`)
 
@@ -588,6 +636,11 @@ the expected proof URI is rebuilt from configured origins keyed by the
   normalization and collision checks (the auth host is reserved); guac
   connections nest under resources with write-only sealed secrets; guac
   resources cannot carry a `public_host`.
+  `POST /api/v1/resources/{id}/public-password` rotates a public resource's
+  share password: the cleartext is returned **once** and never again, and
+  rotating revokes every live public session, so it doubles as the revoke
+  button. Creating a resource with `public_access` returns the first password
+  the same way. `PATCH` never mints one.
 - `policies.py`, `roles.py`, `user_roles.py`: CRUD, step-up gated, recorded
   in `policy_changes` via `changes.py`.
 - `viewers.py`: read-only, admin-tier keyset-paginated views over

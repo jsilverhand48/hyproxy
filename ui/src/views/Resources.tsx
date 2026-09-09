@@ -44,6 +44,7 @@ export function Resources() {
                 <th>Public host</th>
                 <th>Backend host</th>
                 <th>Ports</th>
+                <th>Access</th>
                 <th>Enabled</th>
                 <th></th>
               </tr>
@@ -61,7 +62,19 @@ export function Resources() {
                     )}
                   </td>
                   <td data-label="Backend host">{r.host}</td>
-                  <td data-label="Ports">{r.ports.join(", ")}</td>
+                  <td data-label="Access">
+                    {r.public_access ? (
+                      // A public resource with no password generated yet is
+                      // unreachable, so flag it rather than showing it as live.
+                      r.public_password_set ? (
+                        "public (password)"
+                      ) : (
+                        <span className="muted">public (no password)</span>
+                      )
+                    ) : (
+                      <span className="muted">sign-in</span>
+                    )}
+                  </td>
                   <td data-label="Enabled">{r.enabled ? "yes" : "no"}</td>
                   <td className="actions" data-label="">
                     <button className="link" onClick={() => setDialog({ resource: r })}>

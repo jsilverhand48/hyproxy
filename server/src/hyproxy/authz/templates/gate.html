@@ -1,0 +1,78 @@
+{#
+  Password gate for a public resource.
+
+  Served on the resource's own hostname, where /static (the IdP app's asset
+  mount on the issuer host) does not exist -- so everything this page needs is
+  inline. No script, no external font, no image: the CSP set in publicgate.py
+  is default-src 'none' with style-src 'unsafe-inline' and nothing else.
+
+  Deliberately says as little as possible. It names the resource so a visitor
+  knows the link worked, and never distinguishes "wrong password" from "no
+  password configured" or "no such path".
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Password required</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex;
+      align-items: center; justify-content: center; padding: 1.5rem;
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f4f5f7; color: #1c1e21;
+    }
+    main {
+      width: 100%; max-width: 24rem; background: #fff; border: 1px solid #d8dbe0;
+      border-radius: 10px; padding: 1.75rem;
+    }
+    h1 { margin: 0 0 .25rem; font-size: 1.15rem; }
+    p.res { margin: 0 0 1.25rem; color: #5a6068; font-size: .9rem;
+            overflow-wrap: anywhere; }
+    label { display: block; font-size: .82rem; font-weight: 600;
+            margin-bottom: .4rem; }
+    input[type=password] {
+      width: 100%; padding: .6rem .7rem; font-size: 1rem; font-family: inherit;
+      border: 1px solid #c3c7ce; border-radius: 6px; background: #fff;
+      color: inherit;
+    }
+    input[type=password]:focus { outline: 2px solid #3b6ef5; outline-offset: 1px; }
+    button {
+      margin-top: 1rem; width: 100%; padding: .65rem; font-size: 1rem;
+      font-family: inherit; font-weight: 600; color: #fff; background: #2f5fe0;
+      border: 0; border-radius: 6px; cursor: pointer;
+    }
+    button:hover { background: #2850c4; }
+    .error {
+      margin: 0 0 1rem; padding: .6rem .7rem; border-radius: 6px;
+      background: #fdeaea; border: 1px solid #f0b8b8; color: #8a1f1f;
+      font-size: .88rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #16181c; color: #e6e8ea; }
+      main { background: #1e2126; border-color: #333941; }
+      p.res { color: #98a0aa; }
+      input[type=password] { background: #14161a; border-color: #3a414a; }
+      .error { background: #3a1d1d; border-color: #6b2c2c; color: #f3b7b7; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Password required</h1>
+    <p class="res">{{ resource_name }}</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ action }}">
+      <input type="hidden" name="rd" value="{{ rd }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password"
+             autocomplete="current-password" autofocus required>
+      <button type="submit">Continue</button>
+    </form>
+  </main>
+</body>
+</html>

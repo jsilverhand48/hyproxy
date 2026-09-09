@@ -8,7 +8,8 @@ Backends are chosen ONLY from server-side resource rows, never from client
 input, preserving the data plane's SSRF invariant. Only enabled resources with a
 routing host are emitted:
 
-  - http/https -> a reverse-proxy route to {protocol}://{host}:{ports[0]}
+  - http/https -> a reverse-proxy route to {protocol}://{host}:{ports[0]},
+    flagged `public_gate` when the resource is password-gated public
   - vnc/rdp/ssh -> never emitted; guac sessions ride the portal host's fixed
     /guac/tunnel path (data-plane `guac_tunnel_path` route flag), so guac
     resources carry no public_host
@@ -44,6 +45,10 @@ class RouteOut(BaseModel):
     # True for Guacamole tunnel routes; the data plane routes these to its
     # configured tunnel backend instead of dialing the resource host directly.
     guac_tunnel: bool = False
+    # True for password-gated public resources. Tells the data plane to serve
+    # the /__hyproxy/* password gate on this host instead of proxying it to the
+    # backend; the access decision itself still comes from /authz/check.
+    public_gate: bool = False
 
 
 class RoutesResponse(BaseModel):
@@ -67,7 +72,9 @@ async def routes(db: DbDep) -> RoutesResponse:
                 continue
             port = r.ports[0]
             table[host] = RouteOut(
-                backend=f"{r.protocol}://{r.host}:{port}", backend_port=port
+                backend=f"{r.protocol}://{r.host}:{port}",
+                backend_port=port,
+                public_gate=bool(r.public_access),
             )
         # vnc/rdp/ssh: served via the portal-host tunnel path, never a
         # per-resource route (guac resources have no public_host).

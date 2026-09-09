@@ -2,9 +2,14 @@
 plane (transport-agnostic; spec sections 2, 5, 11).
 
 Every request the data plane wants to proxy comes here first. The response
-tells it to allow (with identity headers to inject), deny, or bounce the
+tells it to allow (with identity headers to inject), deny, 404, or bounce the
 browser to the gateway login. Every decision is written to audit_log in the
 same transaction.
+
+A resource with `public_access` set takes a separate branch (_check_public) that
+never consults the IdP, roles, or Policy: it is gated only by a shared password
+held in a PublicSession cookie, and only the paths in `public_paths` exist at
+all. See authz/publicgate.py.
 """
 
 from datetime import UTC, datetime
@@ -18,9 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hyproxy.authz.decision import evaluate_access
 from hyproxy.authz.gateway import resolve_gateway_session
+from hyproxy.authz.publicgate import PUBLIC_GATE_PATH, resolve_public_session
 from hyproxy.config import get_settings
 from hyproxy.db.engine import get_db
 from hyproxy.db.models import AuditLog, Resource, User
+from hyproxy.policy import pathglob
 
 router = APIRouter()
 
@@ -34,10 +41,16 @@ class CheckRequest(BaseModel):
     source_ip: str
     backend_port: int | None = None
     gateway_cookie: str | None = None
+    # Access cookie for a password-gated public resource, extracted and
+    # stripped by the data plane exactly like gateway_cookie.
+    public_cookie: str | None = None
 
 
 class CheckResponse(BaseModel):
-    decision: str  # "allow" | "deny" | "auth_required"
+    # "not_found" makes the data plane return a bare 404. It exists so a public
+    # resource can hide every path outside its allowlist without confirming that
+    # the hostname serves anything at all.
+    decision: str  # "allow" | "deny" | "auth_required" | "not_found"
     reason: str = ""
     headers: dict[str, str] = {}
     redirect: str = ""
@@ -80,6 +93,81 @@ def _admin_console_host() -> str | None:
     return (urlsplit(origin).hostname or "").lower() or None
 
 
+async def _check_public(
+    db: AsyncSession,
+    body: CheckRequest,
+    resource: Resource,
+    host: str,
+    path: str,
+    now: datetime,
+) -> CheckResponse:
+    """Decide a request against a password-gated public resource.
+
+    Deliberately does NOT fall through to the normal path. A public resource has
+    exactly one way in -- the shared password -- so a signed-in admin gets the
+    same prompt as an anonymous visitor and no role or Policy row can widen what
+    the link exposes.
+    """
+    settings = get_settings()
+
+    # Paths outside the allowlist do not exist. 404 rather than 403 so a public
+    # link is never a probe for what else the backend serves.
+    if not pathglob.matches(resource.public_paths, path):
+        await _audit(
+            db,
+            user_id=None,
+            resource_id=resource.id,
+            port=body.backend_port,
+            decision="deny",
+            reason="public_path_unmatched",
+            source_ip=body.source_ip,
+        )
+        return CheckResponse(decision="not_found", reason="public_path_unmatched")
+
+    session = await resolve_public_session(
+        db,
+        body.public_cookie,
+        resource_id=resource.id,
+        source_ip=body.source_ip,
+        now=now,
+    )
+    if session is None:
+        original = body.uri or "/"
+        redirect = (
+            f"{settings.external_scheme}://{host}{PUBLIC_GATE_PATH}"
+            f"?rd={quote(original, safe='')}"
+        )
+        await _audit(
+            db,
+            user_id=None,
+            resource_id=resource.id,
+            port=body.backend_port,
+            decision="deny",
+            reason="public_unauthenticated",
+            source_ip=body.source_ip,
+        )
+        return CheckResponse(
+            decision="auth_required", reason="public_unauthenticated", redirect=redirect
+        )
+
+    await _audit(
+        db,
+        user_id=None,
+        resource_id=resource.id,
+        port=body.backend_port,
+        decision="allow",
+        reason="public_allowed",
+        source_ip=body.source_ip,
+    )
+    # No identity headers: the backend must see a genuinely anonymous request
+    # and must never be able to mistake a visitor for a real user. The data
+    # plane has already stripped any client-supplied ones.
+    #
+    # cache_scope stays "none": the decision depends on the path, so it is never
+    # host-stable, and public traffic must not skip the per-request check.
+    return CheckResponse(decision="allow", reason="public_allowed")
+
+
 @router.post("/authz/check")
 async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
     settings = get_settings()
@@ -100,6 +188,10 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
             source_ip=body.source_ip,
         )
         return CheckResponse(decision="deny", reason="unknown_resource")
+
+    path = (body.uri or "/").split("?", 1)[0]
+    if resource.public_access:
+        return await _check_public(db, body, resource, host, path, now)
 
     gw = await resolve_gateway_session(db, body.gateway_cookie, source_ip=body.source_ip, now=now)
     if gw is None:
@@ -153,7 +245,6 @@ async def check(body: CheckRequest, db: DbDep) -> CheckResponse:
         )
 
     port = body.backend_port or (resource.ports[0] if resource.ports else 0)
-    path = (body.uri or "/").split("?", 1)[0]
     access = await evaluate_access(
         db, user_id=user.id, resource_id=resource.id, port=port, path=path, now=now
     )
